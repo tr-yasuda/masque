@@ -223,6 +223,11 @@ pub const DEFAULT_MAX_CAPSULE_LENGTH: usize = 65_536;
 /// method returns `Ok(Some(Capsule))`. If more bytes are needed it returns
 /// `Ok(None)`.
 ///
+/// Capsules with unknown types are silently skipped as required by RFC 9297
+/// Section 3.2. Their value bytes are discarded without being copied into a
+/// [`Capsule`], so a peer cannot force the parser to allocate memory for
+/// skipped capsules.
+///
 /// Note that the parser still buffers one complete capsule value before
 /// yielding it, because [`Capsule`] stores the value as a [`Vec<u8>`]. The
 /// streaming improvement is avoiding buffering the *entire* byte stream, not
@@ -312,58 +317,68 @@ impl CapsuleParser {
     }
 
     fn try_parse(&mut self) -> Result<Option<Capsule>> {
-        let window = match self.buf.get(self.start..) {
-            Some(w) if !w.is_empty() => w,
-            _ => {
-                self.compact();
+        loop {
+            let window = match self.buf.get(self.start..) {
+                Some(w) if !w.is_empty() => w,
+                _ => {
+                    self.compact();
+                    return Ok(None);
+                }
+            };
+
+            let (capsule_type_value, type_len) = match quic_varint::decode(window) {
+                Ok(v) => v,
+                Err(err) if is_incomplete_varint(&err) => return Ok(None),
+                Err(err) => return Err(map_varint_err(err)),
+            };
+            let capsule_type = CapsuleType::new(capsule_type_value)?;
+
+            let (length, length_len) = match quic_varint::decode_at(window, type_len) {
+                Ok(v) => v,
+                Err(err) if is_incomplete_varint(&err) => return Ok(None),
+                Err(err) => return Err(map_varint_err(err)),
+            };
+
+            let length = usize::try_from(length).map_err(|_| {
+                Error::h3_datagram_error(
+                    H3DatagramErrorKind::LengthTooLarge,
+                    "capsule length exceeds platform usize",
+                )
+            })?;
+
+            let header_len = type_len + length_len;
+            let end = header_len.checked_add(length).ok_or_else(|| {
+                Error::h3_datagram_error(
+                    H3DatagramErrorKind::LengthOverflow,
+                    "capsule length overflow",
+                )
+            })?;
+
+            if window.len() < end {
                 return Ok(None);
             }
-        };
 
-        let (capsule_type_value, type_len) = match quic_varint::decode(window) {
-            Ok(v) => v,
-            Err(err) if is_incomplete_varint(&err) => return Ok(None),
-            Err(err) => return Err(map_varint_err(err)),
-        };
-        let capsule_type = CapsuleType::new(capsule_type_value)?;
+            let consumed = end;
+            if capsule_type.is_unknown() {
+                self.start += consumed;
+                self.maybe_compact();
+                continue;
+            }
 
-        let (length, length_len) = match quic_varint::decode_at(window, type_len) {
-            Ok(v) => v,
-            Err(err) if is_incomplete_varint(&err) => return Ok(None),
-            Err(err) => return Err(map_varint_err(err)),
-        };
+            if length > self.max_capsule_length {
+                return Err(Error::h3_datagram_error(
+                    H3DatagramErrorKind::LengthTooLarge,
+                    "capsule length exceeds maximum allowed",
+                ));
+            }
 
-        let length = usize::try_from(length).map_err(|_| {
-            Error::h3_datagram_error(
-                H3DatagramErrorKind::LengthTooLarge,
-                "capsule length exceeds platform usize",
-            )
-        })?;
-        if length > self.max_capsule_length {
-            return Err(Error::h3_datagram_error(
-                H3DatagramErrorKind::LengthTooLarge,
-                "capsule length exceeds maximum allowed",
-            ));
+            let value_start = self.start + header_len;
+            let value_end = self.start + end;
+            let value = self.buf[value_start..value_end].to_vec();
+            self.start += end;
+            self.maybe_compact();
+            return Ok(Some(Capsule::new(capsule_type, value)?));
         }
-
-        let header_len = type_len + length_len;
-        let end = header_len.checked_add(length).ok_or_else(|| {
-            Error::h3_datagram_error(
-                H3DatagramErrorKind::LengthOverflow,
-                "capsule length overflow",
-            )
-        })?;
-
-        if window.len() < end {
-            return Ok(None);
-        }
-
-        let value_start = self.start + header_len;
-        let value_end = self.start + end;
-        let value = self.buf[value_start..value_end].to_vec();
-        self.start += end;
-        self.maybe_compact();
-        Ok(Some(Capsule::new(capsule_type, value)?))
     }
 
     fn maybe_compact(&mut self) {
@@ -630,7 +645,7 @@ mod tests {
     #[test]
     fn parser_decodes_multiple_capsules_in_one_feed() {
         let a = Capsule::new(CapsuleType::DATAGRAM, vec![0x01]).unwrap();
-        let b = Capsule::new(CapsuleType::new(0x01).unwrap(), vec![0x02, 0x03]).unwrap();
+        let b = Capsule::new(CapsuleType::DATAGRAM, vec![0x02, 0x03]).unwrap();
         let mut encoded = a.encode().unwrap();
         encoded.extend_from_slice(&b.encode().unwrap());
 
@@ -643,7 +658,7 @@ mod tests {
     #[test]
     fn parser_next_capsule_drains_buffered_capsules() {
         let a = Capsule::new(CapsuleType::DATAGRAM, vec![0x01]).unwrap();
-        let b = Capsule::new(CapsuleType::new(0x01).unwrap(), vec![0x02, 0x03]).unwrap();
+        let b = Capsule::new(CapsuleType::DATAGRAM, vec![0x02, 0x03]).unwrap();
         let mut encoded = a.encode().unwrap();
         encoded.extend_from_slice(&b.encode().unwrap());
 
@@ -751,5 +766,59 @@ mod tests {
                 ..
             }
         ));
+    }
+    #[test]
+    fn parser_silently_skips_unknown_capsule_type() {
+        let known = Capsule::new(CapsuleType::DATAGRAM, vec![0x01]).unwrap();
+        let unknown = Capsule::new(CapsuleType::new(0x2bad).unwrap(), vec![0xab, 0xcd]).unwrap();
+
+        let mut encoded = known.encode().unwrap();
+        encoded.extend_from_slice(&unknown.encode().unwrap());
+
+        let mut parser = CapsuleParser::new();
+        assert_eq!(parser.feed(&encoded).unwrap(), Some(known));
+        assert_eq!(parser.feed(&[]).unwrap(), None);
+    }
+
+    #[test]
+    fn parser_skips_unknown_capsule_at_start_of_stream() {
+        let unknown = Capsule::new(CapsuleType::new(0x2bad).unwrap(), vec![0xab]).unwrap();
+        let known = Capsule::new(CapsuleType::DATAGRAM, vec![0x01, 0x02]).unwrap();
+
+        let mut encoded = unknown.encode().unwrap();
+        encoded.extend_from_slice(&known.encode().unwrap());
+
+        let mut parser = CapsuleParser::new();
+        assert_eq!(parser.feed(&encoded).unwrap(), Some(known));
+        assert_eq!(parser.feed(&[]).unwrap(), None);
+    }
+
+    #[test]
+    fn parser_skips_consecutive_unknown_capsule_types() {
+        let unknown1 = Capsule::new(CapsuleType::new(0x2bad).unwrap(), vec![0x01]).unwrap();
+        let unknown2 = Capsule::new(CapsuleType::new(0x2bae).unwrap(), vec![0x02]).unwrap();
+        let known = Capsule::new(CapsuleType::DATAGRAM, vec![0x03]).unwrap();
+
+        let mut encoded = unknown1.encode().unwrap();
+        encoded.extend_from_slice(&unknown2.encode().unwrap());
+        encoded.extend_from_slice(&known.encode().unwrap());
+
+        let mut parser = CapsuleParser::new();
+        assert_eq!(parser.feed(&encoded).unwrap(), Some(known));
+        assert_eq!(parser.feed(&[]).unwrap(), None);
+    }
+
+    #[test]
+    fn parser_skips_unknown_capsule_without_copying_value() {
+        // Build an unknown capsule whose declared length exceeds the default max
+        // length without using Capsule::new, which rejects such values.
+        let huge_len = DEFAULT_MAX_CAPSULE_LENGTH + 1;
+        let mut encoded = quic_varint::encode(0x01); // unknown type, 1-byte varint
+        encoded.extend_from_slice(&quic_varint::encode(huge_len as u64));
+        encoded.resize(encoded.len() + huge_len, 0x00);
+
+        let mut parser = CapsuleParser::new();
+        assert_eq!(parser.feed(&encoded).unwrap(), None);
+        assert_eq!(parser.feed(&[]).unwrap(), None);
     }
 }
