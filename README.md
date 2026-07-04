@@ -49,16 +49,16 @@ No HTTP/3 or QUIC dependencies are included yet; the first step is to stabilize 
 
 ```bash
 # Run all workspace tests
-cargo test --workspace
+cargo test --workspace --locked
 
 # Check formatting
 cargo fmt --all -- --check
 
 # Run clippy with warnings as errors
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --locked -- -D warnings
 
-# Check documentation
-cargo doc --workspace --no-deps --document-private-items
+# Check documentation (fails on rustdoc warnings)
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --locked
 
 # Run the development helper (fmt + clippy + doc + test)
 cargo xtask ci

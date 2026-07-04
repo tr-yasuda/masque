@@ -50,12 +50,12 @@ fn parse_address(value: String, field: &'static str) -> Result<SocketAddr> {
     if trimmed.is_empty() {
         return Err(Error::InvalidConfig {
             field,
-            message: format!("{field} must not be empty"),
+            message: "must not be empty".into(),
         });
     }
     SocketAddr::from_str(trimmed).map_err(|e| Error::InvalidConfig {
         field,
-        message: format!("{field} is not a valid socket address: {e}"),
+        message: format!("not a valid socket address: {e}"),
     })
 }
 
@@ -80,7 +80,7 @@ mod tests {
                 ..
             }
         ));
-        assert!(err.to_string().contains("bind_addr must not be empty"));
+        assert!(err.to_string().contains("must not be empty"));
     }
 
     #[test]
@@ -93,30 +93,24 @@ mod tests {
                 ..
             }
         ));
-        assert!(err.to_string().contains("peer_addr must not be empty"));
+        assert!(err.to_string().contains("must not be empty"));
     }
 
     #[test]
     fn config_rejects_whitespace_only_address() {
         let err = Config::new("   ", "127.0.0.1:1234").unwrap_err();
-        assert!(err.to_string().contains("bind_addr must not be empty"));
+        assert!(err.to_string().contains("must not be empty"));
     }
 
     #[test]
     fn config_rejects_missing_port() {
         let err = Config::new("127.0.0.1", "127.0.0.1:1234").unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("bind_addr is not a valid socket address")
-        );
+        assert!(err.to_string().contains("not a valid socket address"));
     }
 
     #[test]
     fn config_rejects_invalid_address() {
         let err = Config::new("not-an-address", "127.0.0.1:1234").unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("bind_addr is not a valid socket address")
-        );
+        assert!(err.to_string().contains("not a valid socket address"));
     }
 }

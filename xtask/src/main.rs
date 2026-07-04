@@ -73,13 +73,17 @@ fn run_clippy() -> ExitCode {
 
 fn run_doc() -> ExitCode {
     println!("Running cargo doc...");
-    run_command(Command::new("cargo").args([
-        "doc",
-        "--workspace",
-        "--no-deps",
-        "--document-private-items",
-        "--locked",
-    ]))
+    run_command(
+        Command::new("cargo")
+            .args([
+                "doc",
+                "--workspace",
+                "--no-deps",
+                "--document-private-items",
+                "--locked",
+            ])
+            .env("RUSTDOCFLAGS", "-D warnings"),
+    )
 }
 
 fn run_test() -> ExitCode {
