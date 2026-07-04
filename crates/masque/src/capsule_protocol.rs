@@ -233,11 +233,52 @@ fn is_valid_base64(input: &[u8]) -> bool {
         return false;
     }
 
-    input[..content_len].iter().all(|&c| is_base64_char(c))
+    if !input[..content_len].iter().all(|&c| is_base64_char(c)) {
+        return false;
+    }
+
+    let restored_padding = if padding == 0 {
+        (4 - content_len % 4) % 4
+    } else {
+        padding
+    };
+    if restored_padding == 3 || (content_len + restored_padding) % 4 != 0 {
+        return false;
+    }
+
+    let effective_padding = if padding == 0 {
+        restored_padding
+    } else {
+        padding
+    };
+    if effective_padding > 0 {
+        let last_value = base64_value(input[content_len - 1]);
+        let mask = match effective_padding {
+            1 => 0b11,
+            2 => 0b1111,
+            _ => unreachable!(),
+        };
+        if last_value & mask != 0 {
+            return false;
+        }
+    }
+
+    true
 }
 
 fn is_base64_char(c: u8) -> bool {
     c.is_ascii_alphabetic() || c.is_ascii_digit() || matches!(c, b'+' | b'/')
+}
+
+fn base64_value(c: u8) -> u8 {
+    match c {
+        b'A'..=b'Z' => c - b'A',
+        b'a'..=b'z' => c - b'a' + 26,
+        b'0'..=b'9' => c - b'0' + 52,
+        b'+' => 62,
+        b'/' => 63,
+        _ => 0,
+    }
 }
 
 /// Parse a token bare item.
@@ -383,6 +424,17 @@ mod tests {
     #[test]
     fn parse_unpadded_binary_parameter_returns_boolean() {
         assert_eq!(parse_capsule_protocol("?1;foo=:Zg:"), Some(true));
+        assert_eq!(parse_capsule_protocol("?1;foo=:ZGVzdA:"), Some(true));
+    }
+
+    #[test]
+    fn parse_undecodable_binary_parameter_returns_none() {
+        // Length that would require three padding characters.
+        assert_eq!(parse_capsule_protocol("?1;foo=:A:"), None);
+        // Explicit padding inconsistent with content length.
+        assert_eq!(parse_capsule_protocol("?1;foo=:Zg=:"), None);
+        // Padding bits are not zero.
+        assert_eq!(parse_capsule_protocol("?1;foo=:Zh==:"), None);
     }
 
     #[test]
