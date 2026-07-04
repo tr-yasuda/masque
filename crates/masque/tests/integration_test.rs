@@ -225,6 +225,44 @@ fn session_rejects_conflicting_local_h3_datagram_renegotiation() {
 }
 
 #[test]
+fn session_rejects_duplicate_peer_h3_datagram_value() {
+    let mut session = Session::new(Protocol::ConnectUdp);
+    session
+        .negotiate_peer_h3_datagram(H3DatagramSettingValue::ENABLED)
+        .unwrap();
+    let err = session
+        .negotiate_peer_h3_datagram(H3DatagramSettingValue::ENABLED)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::H3SettingsConflict {
+            setting: 0x33,
+            previous: 1,
+            received: 1,
+        }
+    ));
+}
+
+#[test]
+fn session_rejects_duplicate_local_h3_datagram_value() {
+    let mut session = Session::new(Protocol::ConnectUdp);
+    session
+        .set_local_h3_datagram(H3DatagramSettingValue::DISABLED)
+        .unwrap();
+    let err = session
+        .set_local_h3_datagram(H3DatagramSettingValue::DISABLED)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        Error::H3SettingsConflict {
+            setting: 0x33,
+            previous: 0,
+            received: 0,
+        }
+    ));
+}
+
+#[test]
 fn udp_echo_server_example_echoes_datagrams() {
     // Build the example binary so we can run it directly (avoiding the cargo
     // wrapper, which makes process cleanup easier).

@@ -105,25 +105,22 @@ impl Session {
 
     /// Record the local endpoint's advertised `SETTINGS_H3_DATAGRAM` value.
     ///
-    /// This should be called after the local HTTP/3 SETTINGS frame has been
-    /// sent. Because HTTP/3 SETTINGS are sent once per connection, this method
-    /// ignores subsequent calls with a different value and returns an error if
-    /// a conflicting value is supplied.
+    /// This should be called once after the local HTTP/3 SETTINGS frame has
+    /// been sent. Because HTTP/3 SETTINGS are sent once per connection and
+    /// duplicate setting identifiers are not allowed, any second call is
+    /// rejected as a conflict even if the value is identical.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::H3SettingsConflict`] if the setting has already been
-    /// recorded with a different value.
+    /// Returns [`Error::H3SettingsConflict`] if the local setting has already
+    /// been recorded.
     pub fn set_local_h3_datagram(&mut self, value: H3DatagramSettingValue) -> Result<()> {
         if let Some(previous) = self.caps.local_h3_datagram {
-            if previous != value {
-                return Err(Error::H3SettingsConflict {
-                    setting: SETTINGS_H3_DATAGRAM,
-                    previous: previous.get(),
-                    received: value.get(),
-                });
-            }
-            return Ok(());
+            return Err(Error::H3SettingsConflict {
+                setting: SETTINGS_H3_DATAGRAM,
+                previous: previous.get(),
+                received: value.get(),
+            });
         }
         self.caps.local_h3_datagram = Some(value);
         Ok(())
@@ -131,24 +128,21 @@ impl Session {
 
     /// Apply a peer `SETTINGS_H3_DATAGRAM` value received from the remote endpoint.
     ///
-    /// Records the peer advertisement and rejects any later call that would
-    /// change the already-negotiated value, since HTTP/3 SETTINGS are sent only
-    /// once per connection.
+    /// Records the peer advertisement. Because HTTP/3 SETTINGS are sent once
+    /// per connection and duplicate setting identifiers are not allowed, any
+    /// second call is rejected as a conflict even if the value is identical.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::H3SettingsConflict`] if the setting has already been
-    /// negotiated with a different value.
+    /// Returns [`Error::H3SettingsConflict`] if the peer setting has already
+    /// been recorded.
     pub fn negotiate_peer_h3_datagram(&mut self, value: H3DatagramSettingValue) -> Result<()> {
         if let Some(previous) = self.caps.peer_h3_datagram {
-            if previous != value {
-                return Err(Error::H3SettingsConflict {
-                    setting: SETTINGS_H3_DATAGRAM,
-                    previous: previous.get(),
-                    received: value.get(),
-                });
-            }
-            return Ok(());
+            return Err(Error::H3SettingsConflict {
+                setting: SETTINGS_H3_DATAGRAM,
+                previous: previous.get(),
+                received: value.get(),
+            });
         }
         self.caps.peer_h3_datagram = Some(value);
         Ok(())
@@ -244,30 +238,41 @@ mod tests {
     }
 
     #[test]
-    fn session_allows_idempotent_local_setting() {
+    fn session_rejects_duplicate_local_setting() {
         let mut session = Session::new(Protocol::ConnectUdp);
         session
             .set_local_h3_datagram(H3DatagramSettingValue::ENABLED)
             .unwrap();
-        session
+        let err = session
             .set_local_h3_datagram(H3DatagramSettingValue::ENABLED)
-            .unwrap();
-        session
-            .negotiate_peer_h3_datagram(H3DatagramSettingValue::ENABLED)
-            .unwrap();
-        assert!(session.is_h3_datagram_enabled());
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3SettingsConflict {
+                setting: SETTINGS_H3_DATAGRAM,
+                previous: 1,
+                received: 1,
+            }
+        ));
     }
 
     #[test]
-    fn session_allows_idempotent_peer_negotiation() {
+    fn session_rejects_duplicate_peer_negotiation() {
         let mut session = Session::new(Protocol::ConnectUdp);
         session
             .negotiate_peer_h3_datagram(H3DatagramSettingValue::DISABLED)
             .unwrap();
-        session
+        let err = session
             .negotiate_peer_h3_datagram(H3DatagramSettingValue::DISABLED)
-            .unwrap();
-        assert!(!session.is_h3_datagram_enabled());
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3SettingsConflict {
+                setting: SETTINGS_H3_DATAGRAM,
+                previous: 0,
+                received: 0,
+            }
+        ));
     }
 
     #[test]
@@ -313,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn session_negotiation_preserves_enabled_state_on_invalid_value() {
+    fn session_negotiation_preserves_enabled_state_on_duplicate_value() {
         let mut session = Session::new(Protocol::ConnectUdp);
         session
             .set_local_h3_datagram(H3DatagramSettingValue::ENABLED)
