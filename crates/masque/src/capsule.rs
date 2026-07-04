@@ -1,5 +1,6 @@
 //! Capsule Protocol types and serialization (RFC 9297 Section 3.2).
 
+use crate::error::VarIntErrorKind;
 use crate::quic_varint::{self, MAX_VARINT};
 use crate::{Error, H3DatagramErrorKind, Result};
 
@@ -126,6 +127,44 @@ impl Capsule {
         Ok(out)
     }
 
+    /// Serialize the capsule into a caller-provided buffer.
+    ///
+    /// Writes the capsule type varint, length varint, and value bytes in order.
+    /// Returns the total number of bytes written.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidVarInt`] with [`VarIntErrorKind::BufferTooShort`]
+    /// if `buf` is too small to hold the serialized capsule. May also return
+    /// [`Error::H3DatagramError`] with [`H3DatagramErrorKind::LengthOverflow`]
+    /// if the serialized size overflows `usize`.
+    pub fn encode_into(&self, buf: &mut [u8]) -> Result<usize> {
+        let type_len = varint_len(self.capsule_type.value());
+        let length_len = varint_len(self.length());
+        let value_len = self.value().len();
+        let total_len = type_len
+            .checked_add(length_len)
+            .and_then(|n| n.checked_add(value_len))
+            .ok_or_else(|| {
+                Error::h3_datagram_error(
+                    H3DatagramErrorKind::LengthOverflow,
+                    "encoded capsule overflow",
+                )
+            })?;
+        if buf.len() < total_len {
+            return Err(Error::InvalidVarInt {
+                kind: VarIntErrorKind::BufferTooShort,
+                message: "output buffer too short".into(),
+            });
+        }
+
+        let mut offset = 0;
+        offset += quic_varint::encode_into_at(self.capsule_type.value(), buf, offset)?;
+        offset += quic_varint::encode_into_at(self.length(), buf, offset)?;
+        buf[offset..offset + value_len].copy_from_slice(self.value());
+        Ok(total_len)
+    }
+
     /// Decode a capsule from a byte buffer.
     ///
     /// Returns the decoded capsule and the number of bytes consumed.
@@ -174,6 +213,154 @@ impl Capsule {
     }
 }
 
+/// Default maximum capsule value length accepted by [`CapsuleParser`].
+pub const DEFAULT_MAX_CAPSULE_LENGTH: usize = 65_536;
+
+/// A push-style streaming parser for Capsule Protocol messages.
+///
+/// The parser buffers only unconsumed bytes. Callers feed newly received bytes
+/// with [`CapsuleParser::feed`]; when a complete capsule is available the
+/// method returns `Ok(Some(Capsule))`. If more bytes are needed it returns
+/// `Ok(None)`.
+///
+/// The default maximum accepted capsule value length is
+/// [`DEFAULT_MAX_CAPSULE_LENGTH`]. Use [`CapsuleParser::with_max_length`] to
+/// configure a different limit. `Clone` performs a deep copy of the internal
+/// buffer, which can be expensive if a large partial capsule is buffered.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CapsuleParser {
+    buf: Vec<u8>,
+    /// Number of consumed prefix bytes in `buf`.
+    start: usize,
+    max_capsule_length: usize,
+}
+
+impl Default for CapsuleParser {
+    fn default() -> Self {
+        Self::with_max_length(DEFAULT_MAX_CAPSULE_LENGTH)
+    }
+}
+
+impl CapsuleParser {
+    /// Create a new empty parser with the default maximum capsule length.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Create a new empty parser with a custom maximum capsule value length.
+    ///
+    /// Capsules whose declared length exceeds `max_capsule_length` are rejected
+    /// with [`H3DatagramErrorKind::LengthTooLarge`].
+    pub fn with_max_length(max_capsule_length: usize) -> Self {
+        Self {
+            buf: Vec::new(),
+            start: 0,
+            max_capsule_length,
+        }
+    }
+
+    /// Return the maximum capsule value length accepted by this parser.
+    #[must_use]
+    pub const fn max_capsule_length(&self) -> usize {
+        self.max_capsule_length
+    }
+
+    /// Feed bytes into the parser and try to emit one complete capsule.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::H3DatagramError`] if the buffered bytes describe a
+    /// malformed capsule header (length too large, type out of range, etc.).
+    pub fn feed(&mut self, bytes: &[u8]) -> Result<Option<Capsule>> {
+        self.buf.extend_from_slice(bytes);
+        self.try_parse()
+    }
+
+    /// Try to emit the next buffered capsule without feeding new bytes.
+    ///
+    /// This is useful when a single [`CapsuleParser::feed`] call returns one
+    /// capsule but more complete capsules remain in the internal buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::H3DatagramError`] if the buffered bytes describe a
+    /// malformed capsule header.
+    pub fn next_capsule(&mut self) -> Result<Option<Capsule>> {
+        self.try_parse()
+    }
+
+    fn try_parse(&mut self) -> Result<Option<Capsule>> {
+        let window = match self.buf.get(self.start..) {
+            Some(w) if !w.is_empty() => w,
+            _ => {
+                self.compact();
+                return Ok(None);
+            }
+        };
+
+        let (capsule_type_value, type_len) = match quic_varint::decode(window) {
+            Ok(v) => v,
+            Err(err) if is_incomplete_varint(&err) => return Ok(None),
+            Err(err) => return Err(map_varint_err(err)),
+        };
+        let capsule_type = CapsuleType::new(capsule_type_value)?;
+
+        let (length, length_len) = match quic_varint::decode_at(window, type_len) {
+            Ok(v) => v,
+            Err(err) if is_incomplete_varint(&err) => return Ok(None),
+            Err(err) => return Err(map_varint_err(err)),
+        };
+
+        let length = usize::try_from(length).map_err(|_| {
+            Error::h3_datagram_error(
+                H3DatagramErrorKind::LengthTooLarge,
+                "capsule length exceeds platform usize",
+            )
+        })?;
+        if length > self.max_capsule_length {
+            return Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::LengthTooLarge,
+                "capsule length exceeds maximum allowed",
+            ));
+        }
+
+        let header_len = type_len + length_len;
+        let end = header_len.checked_add(length).ok_or_else(|| {
+            Error::h3_datagram_error(
+                H3DatagramErrorKind::LengthOverflow,
+                "capsule length overflow",
+            )
+        })?;
+
+        if window.len() < end {
+            return Ok(None);
+        }
+
+        let value_start = self.start + header_len;
+        let value_end = self.start + end;
+        let value = self.buf[value_start..value_end].to_vec();
+        self.start += end;
+        self.maybe_compact();
+        Ok(Some(Capsule::new(capsule_type, value)?))
+    }
+
+    fn maybe_compact(&mut self) {
+        const COMPACT_THRESHOLD: usize = 1024;
+        if self.start >= COMPACT_THRESHOLD {
+            self.compact();
+        }
+    }
+
+    fn compact(&mut self) {
+        if self.start == self.buf.len() {
+            self.buf.clear();
+        } else {
+            self.buf.drain(..self.start);
+        }
+        self.start = 0;
+    }
+}
+
 fn validate_length(len: usize) -> Result<()> {
     let len_u64 = u64::try_from(len).map_err(|_| {
         Error::h3_datagram_error(
@@ -196,6 +383,27 @@ fn map_varint_err(err: Error) -> Error {
         "malformed capsule varint",
         err,
     )
+}
+
+fn is_incomplete_varint(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::InvalidVarInt {
+            kind: VarIntErrorKind::BufferTooShort
+                | VarIntErrorKind::EmptyBuffer
+                | VarIntErrorKind::OffsetOutOfBounds,
+            ..
+        }
+    )
+}
+
+fn varint_len(value: u64) -> usize {
+    match value {
+        0..=0x3f => 1,
+        0x40..=0x3fff => 2,
+        0x4000..=0x3fffffff => 4,
+        _ => 8,
+    }
 }
 
 #[cfg(test)]
@@ -331,5 +539,146 @@ mod tests {
         let (decoded, consumed) = Capsule::decode(&encoded).unwrap();
         assert_eq!(consumed, 4);
         assert_eq!(decoded.value(), &[0x01, 0x02]);
+    }
+
+    #[test]
+    fn capsule_encode_into_matches_encode() {
+        let value = vec![0xab, 0xcd, 0xef];
+        let capsule = Capsule::new(CapsuleType::DATAGRAM, value).unwrap();
+        let encoded = capsule.encode().unwrap();
+        let mut buf = vec![0u8; encoded.len()];
+        let written = capsule.encode_into(&mut buf).unwrap();
+        assert_eq!(written, encoded.len());
+        assert_eq!(&buf[..written], &encoded);
+    }
+
+    #[test]
+    fn capsule_encode_into_rejects_short_buffer() {
+        let capsule = Capsule::new(CapsuleType::DATAGRAM, vec![0x01, 0x02]).unwrap();
+        let mut buf = [0u8; 1];
+        let err = capsule.encode_into(&mut buf).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidVarInt {
+                kind: VarIntErrorKind::BufferTooShort,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parser_returns_none_for_incomplete_type() {
+        // 0xc0 starts an 8-byte varint but only 1 byte is supplied.
+        let mut parser = CapsuleParser::new();
+        assert_eq!(parser.feed(&[0xc0]).unwrap(), None);
+    }
+
+    #[test]
+    fn parser_returns_none_for_incomplete_length() {
+        // Type = 0x00, length varint incomplete (0xc0 starts 8-byte form).
+        let mut parser = CapsuleParser::new();
+        assert_eq!(parser.feed(&[0x00, 0xc0]).unwrap(), None);
+    }
+
+    #[test]
+    fn parser_returns_none_for_incomplete_value() {
+        // Type = 0x00, length = 0x05, only 2 value bytes.
+        let mut parser = CapsuleParser::new();
+        assert_eq!(parser.feed(&[0x00, 0x05, 0x01, 0x02]).unwrap(), None);
+    }
+
+    #[test]
+    fn parser_decodes_after_multiple_feeds() {
+        let mut parser = CapsuleParser::new();
+        assert_eq!(parser.feed(&[0x00]).unwrap(), None);
+        assert_eq!(parser.feed(&[0x03, 0x01]).unwrap(), None);
+        let capsule = parser.feed(&[0x02, 0x03]).unwrap().unwrap();
+        assert_eq!(capsule.capsule_type(), CapsuleType::DATAGRAM);
+        assert_eq!(capsule.value(), &[0x01, 0x02, 0x03]);
+    }
+
+    #[test]
+    fn parser_decodes_empty_value_capsule() {
+        let mut parser = CapsuleParser::new();
+        let capsule = parser.feed(&[0x00, 0x00]).unwrap().unwrap();
+        assert_eq!(capsule.capsule_type(), CapsuleType::DATAGRAM);
+        assert_eq!(capsule.value(), &[]);
+    }
+
+    #[test]
+    fn parser_decodes_multiple_capsules_in_one_feed() {
+        let a = Capsule::new(CapsuleType::DATAGRAM, vec![0x01]).unwrap();
+        let b = Capsule::new(CapsuleType::new(0x01).unwrap(), vec![0x02, 0x03]).unwrap();
+        let mut encoded = a.encode().unwrap();
+        encoded.extend_from_slice(&b.encode().unwrap());
+
+        let mut parser = CapsuleParser::new();
+        assert_eq!(parser.feed(&encoded).unwrap(), Some(a));
+        assert_eq!(parser.feed(&[]).unwrap(), Some(b));
+        assert_eq!(parser.feed(&[]).unwrap(), None);
+    }
+
+    #[test]
+    fn parser_next_capsule_drains_buffered_capsules() {
+        let a = Capsule::new(CapsuleType::DATAGRAM, vec![0x01]).unwrap();
+        let b = Capsule::new(CapsuleType::new(0x01).unwrap(), vec![0x02, 0x03]).unwrap();
+        let mut encoded = a.encode().unwrap();
+        encoded.extend_from_slice(&b.encode().unwrap());
+
+        let mut parser = CapsuleParser::new();
+        assert_eq!(parser.feed(&encoded).unwrap(), Some(a));
+        assert_eq!(parser.next_capsule().unwrap(), Some(b));
+        assert_eq!(parser.next_capsule().unwrap(), None);
+    }
+
+    #[test]
+    fn parser_rejects_length_exceeding_max() {
+        let mut parser = CapsuleParser::with_max_length(4);
+        // Type = 0x00, Length = 0x05, value = 5 bytes (exceeds max 4).
+        let err = parser
+            .feed(&[0x00, 0x05, 0x01, 0x02, 0x03, 0x04, 0x05])
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::LengthTooLarge,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parser_decodes_varint_length_boundaries_across_feeds() {
+        for len in [63usize, 64, 16383, 16384] {
+            let capsule = Capsule::new(CapsuleType::DATAGRAM, vec![0u8; len]).unwrap();
+            let encoded = capsule.encode().unwrap();
+
+            let mut parser = CapsuleParser::new();
+            let mut decoded = None;
+            for chunk in encoded.chunks(7) {
+                if let Some(c) = parser.feed(chunk).unwrap() {
+                    decoded = Some(c);
+                }
+            }
+            let decoded = decoded.expect("should decode a capsule for length {len}");
+            assert_eq!(decoded.capsule_type(), CapsuleType::DATAGRAM);
+            assert_eq!(decoded.value().len(), len);
+            assert_eq!(parser.feed(&[]).unwrap(), None);
+        }
+    }
+
+    #[test]
+    fn encode_into_does_not_partially_write_on_short_buffer() {
+        let capsule = Capsule::new(CapsuleType::DATAGRAM, vec![0x01, 0x02]).unwrap();
+        let mut buf = [0x9fu8; 3];
+        let err = capsule.encode_into(&mut buf).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidVarInt {
+                kind: VarIntErrorKind::BufferTooShort,
+                ..
+            }
+        ));
+        assert_eq!(buf, [0x9f; 3]);
     }
 }

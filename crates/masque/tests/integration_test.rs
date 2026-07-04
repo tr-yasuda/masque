@@ -13,10 +13,10 @@ use std::time::Duration;
 
 use masque::quic_varint::{self, MAX_VARINT};
 use masque::{
-    CAPSULE_PROTOCOL, Capsule, CapsuleProtocolError, CapsuleType, Config, DatagramPayload, Error,
-    H3DatagramErrorKind, H3DatagramSettingValue, HttpDatagram, Protocol, SETTINGS_H3_DATAGRAM,
-    Session, VarIntErrorKind, parse_capsule_protocol, serialize_capsule_protocol,
-    validate_h3_datagram_setting_value,
+    CAPSULE_PROTOCOL, Capsule, CapsuleParser, CapsuleProtocolError, CapsuleType, Config,
+    DatagramPayload, Error, H3DatagramErrorKind, H3DatagramSettingValue, HttpDatagram, Protocol,
+    SETTINGS_H3_DATAGRAM, Session, VarIntErrorKind, parse_capsule_protocol,
+    serialize_capsule_protocol, validate_h3_datagram_setting_value,
 };
 
 /// RAII guard that kills a spawned child process when dropped.
@@ -530,6 +530,31 @@ fn capsule_decode_wraps_invalid_varint_header_in_h3_datagram_error_from_public_a
         }
     ));
     assert!(err.to_string().contains("malformed capsule varint"));
+}
+
+#[test]
+fn capsule_parser_round_trips_known_and_unknown_types() {
+    let datagram = Capsule::new(CapsuleType::DATAGRAM, vec![0xde, 0xad]).unwrap();
+    let unknown = Capsule::new(CapsuleType::new(0x2bad).unwrap(), vec![0xbe, 0xef]).unwrap();
+
+    let mut encoded = datagram.encode().unwrap();
+    encoded.extend_from_slice(&unknown.encode().unwrap());
+
+    let mut parser = CapsuleParser::new();
+    assert_eq!(parser.feed(&encoded).unwrap(), Some(datagram));
+    assert_eq!(parser.feed(&[]).unwrap(), Some(unknown));
+    assert_eq!(parser.feed(&[]).unwrap(), None);
+}
+
+#[test]
+fn capsule_parser_handles_partial_input() {
+    let mut parser = CapsuleParser::new();
+    assert_eq!(parser.feed(&[0x00]).unwrap(), None);
+    assert_eq!(parser.feed(&[0x02]).unwrap(), None);
+    assert_eq!(parser.feed(&[0x01]).unwrap(), None);
+    let capsule = parser.feed(&[0x02, 0x03]).unwrap().unwrap();
+    assert_eq!(capsule.capsule_type(), CapsuleType::DATAGRAM);
+    assert_eq!(capsule.value(), &[0x01, 0x02]);
 }
 
 #[test]

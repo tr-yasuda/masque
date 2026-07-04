@@ -25,7 +25,7 @@ pub mod quic_varint;
 pub mod settings;
 pub mod types;
 
-pub use capsule::{Capsule, CapsuleType};
+pub use capsule::{Capsule, CapsuleParser, CapsuleType};
 pub use capsule_protocol::{
     CAPSULE_PROTOCOL, CapsuleProtocolError, parse_capsule_protocol, serialize_capsule_protocol,
 };
