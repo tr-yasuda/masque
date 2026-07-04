@@ -15,9 +15,9 @@ pub const CAPSULE_PROTOCOL: &str = "capsule-protocol";
 /// Parse a `Capsule-Protocol` header value as a Boolean Structured Field.
 ///
 /// Returns `Some(true)` for `?1` and `Some(false)` for `?0`. Optional
-/// surrounding whitespace (SP / HTAB), optional whitespace before parameters,
-/// and unknown parameters are handled as required by RFC 8941 and RFC 9297.
-/// Returns `None` for empty or malformed input, or for non-boolean values.
+/// surrounding whitespace (SP / HTAB) and unknown parameters are handled as
+/// required by RFC 8941 and RFC 9297. Returns `None` for empty or malformed
+/// input, or for non-boolean values.
 ///
 /// Per RFC 9297 Section 3.4, a `false` value has the same semantics as the
 /// header being absent. Callers that want to detect Capsule Protocol support
@@ -37,7 +37,7 @@ pub fn parse_capsule_protocol(value: &str) -> Option<bool> {
         _ => return None,
     };
 
-    let rest = trim_start_ows(&bytes[2..]);
+    let rest = &bytes[2..];
     if rest.is_empty() {
         return Some(flag);
     }
@@ -65,23 +65,13 @@ fn trim_ows(value: &str) -> &str {
         .trim_end_matches([' ', '\t'])
 }
 
-/// Strip optional leading whitespace from a byte slice.
-fn trim_start_ows(value: &[u8]) -> &[u8] {
-    let mut i = 0;
-    while i < value.len() && (value[i] == b' ' || value[i] == b'\t') {
-        i += 1;
-    }
-    &value[i..]
-}
-
 /// Validate the remainder of a Boolean Item, which consists only of parameters.
 fn parse_parameters(mut input: &[u8]) -> Option<()> {
     while !input.is_empty() {
         if input[0] != b';' {
             return None;
         }
-        input = &input[1..];
-        input = trim_start_ows(input);
+        input = skip_sp(&input[1..]);
 
         let (key, rest) = parse_key(input)?;
         if key.is_empty() {
@@ -146,22 +136,27 @@ fn parse_number(input: &[u8]) -> Option<(&[u8], &[u8])> {
         i += 1;
     }
 
-    let start = i;
+    let int_start = i;
     while i < input.len() && input[i].is_ascii_digit() {
         i += 1;
     }
 
-    if i == start {
+    let int_digits = i - int_start;
+    if int_digits == 0 || int_digits > 15 {
         return None;
     }
 
     if input.get(i) == Some(&b'.') {
+        if int_digits > 12 {
+            return None;
+        }
         i += 1;
         let frac_start = i;
         while i < input.len() && input[i].is_ascii_digit() {
             i += 1;
         }
-        if i == frac_start {
+        let frac_digits = i - frac_start;
+        if frac_digits == 0 || frac_digits > 3 {
             return None;
         }
     }
@@ -189,7 +184,7 @@ fn parse_string(input: &[u8]) -> Option<(&[u8], &[u8])> {
                 i += 2;
             }
             b'"' => return Some((&input[..i + 1], &input[i + 1..])),
-            0x00..=0x1f | 0x7f => return None,
+            0x00..=0x1f | 0x7f..=0xff => return None,
             _ => i += 1,
         }
     }
@@ -205,20 +200,41 @@ fn parse_binary(input: &[u8]) -> Option<(&[u8], &[u8])> {
 
     let mut i = 1;
     while i < input.len() {
-        if is_base64_char(input[i]) {
-            i += 1;
-        } else if input[i] == b':' {
+        if input[i] == b':' {
+            let content = &input[1..i];
+            if !is_valid_base64(content) {
+                return None;
+            }
             return Some((&input[..i + 1], &input[i + 1..]));
-        } else {
-            return None;
         }
+        i += 1;
     }
 
     None
 }
 
+fn is_valid_base64(input: &[u8]) -> bool {
+    if input.len() % 4 != 0 {
+        return false;
+    }
+
+    let mut padding = 0;
+    for (i, &c) in input.iter().enumerate() {
+        if c == b'=' {
+            if i + 2 < input.len() {
+                return false;
+            }
+            padding += 1;
+        } else if padding > 0 || !is_base64_char(c) {
+            return false;
+        }
+    }
+
+    padding <= 2
+}
+
 fn is_base64_char(c: u8) -> bool {
-    c.is_ascii_alphabetic() || c.is_ascii_digit() || matches!(c, b'+' | b'/' | b'=')
+    c.is_ascii_alphabetic() || c.is_ascii_digit() || matches!(c, b'+' | b'/')
 }
 
 /// Parse a token bare item.
@@ -275,6 +291,15 @@ fn parse_boolean_value(input: &[u8]) -> Option<(&[u8], &[u8])> {
     }
 }
 
+/// Skip optional SP characters (RFC 8941 allows `*SP` after `;`).
+fn skip_sp(input: &[u8]) -> &[u8] {
+    let mut i = 0;
+    while i < input.len() && input[i] == b' ' {
+        i += 1;
+    }
+    &input[i..]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,9 +328,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_whitespace_before_parameters_returns_boolean() {
-        assert_eq!(parse_capsule_protocol("?1 ;foo=bar"), Some(true));
-        assert_eq!(parse_capsule_protocol("?0\t;foo"), Some(false));
+    fn parse_whitespace_after_parameter_separator_returns_boolean() {
+        assert_eq!(parse_capsule_protocol("?1; foo=bar"), Some(true));
+        assert_eq!(parse_capsule_protocol("?0; foo"), Some(false));
+    }
+
+    #[test]
+    fn parse_whitespace_before_parameter_separator_returns_none() {
+        assert_eq!(parse_capsule_protocol("?1 ;foo=bar"), None);
+        assert_eq!(parse_capsule_protocol("?0\t;foo"), None);
     }
 
     #[test]
@@ -313,7 +344,10 @@ mod tests {
         assert_eq!(parse_capsule_protocol("?1;foo=bar"), Some(true));
         assert_eq!(parse_capsule_protocol("?0;foo"), Some(false));
         assert_eq!(parse_capsule_protocol(" ?1;ext=1 "), Some(true));
-        assert_eq!(parse_capsule_protocol("?1;a=1;b=?0;c=:abc:"), Some(true));
+        assert_eq!(
+            parse_capsule_protocol("?1;a=1;b=?0;c=:dGVzdA==:"),
+            Some(true)
+        );
     }
 
     #[test]
@@ -335,6 +369,7 @@ mod tests {
         assert_eq!(parse_capsule_protocol("?1;foo=\"unterminated"), None);
         assert_eq!(parse_capsule_protocol("?1;foo =bar"), None);
         assert_eq!(parse_capsule_protocol("?1;foo=?"), None);
+        assert_eq!(parse_capsule_protocol("?1;foo=:="), None);
     }
 
     #[test]
@@ -344,6 +379,21 @@ mod tests {
         assert_eq!(parse_capsule_protocol("42"), None);
         assert_eq!(parse_capsule_protocol(":abc:"), None);
         assert_eq!(parse_capsule_protocol("?1, ?1"), None);
+    }
+
+    #[test]
+    fn parse_number_parameter_limits_are_enforced() {
+        // Integer with more than 15 digits.
+        assert_eq!(parse_capsule_protocol("?1;foo=1234567890123456"), None);
+        // Decimal with more than 12 integer digits.
+        assert_eq!(parse_capsule_protocol("?1;foo=1234567890123.0"), None);
+        // Decimal with more than 3 fractional digits.
+        assert_eq!(parse_capsule_protocol("?1;foo=1.1234"), None);
+    }
+
+    #[test]
+    fn parse_string_parameter_rejects_non_ascii() {
+        assert_eq!(parse_capsule_protocol("?1;foo=\"é\""), None);
     }
 
     #[test]
