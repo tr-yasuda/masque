@@ -15,7 +15,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 /// Buffer size large enough for the biggest standard IPv6 UDP payload (65 535
-/// byte IP packet minus 8 byte UDP header).
+/// bytes IPv6 payload length minus 8 byte UDP header).
 const MAX_UDP_PAYLOAD: usize = 65_527;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

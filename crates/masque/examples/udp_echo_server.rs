@@ -18,9 +18,9 @@
 use std::env;
 use std::net::UdpSocket;
 
-/// The largest UDP payload for a standard IPv6 datagram (65 535 bytes IP packet
-/// minus 8 bytes UDP header). This size also covers the IPv4 maximum, so the
-/// example works correctly for both address families.
+/// The largest UDP payload for a standard IPv6 datagram (65 535 bytes IPv6
+/// payload length minus 8 bytes UDP header). This size also covers the IPv4
+/// maximum, so the example works correctly for both address families.
 const MAX_UDP_PAYLOAD: usize = 65_527;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
