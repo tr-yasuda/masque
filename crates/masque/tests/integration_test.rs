@@ -79,6 +79,7 @@ fn h3_datagram_error_can_be_created() {
     let err = Error::H3DatagramError {
         kind: H3DatagramErrorKind::Generic,
         message: "invalid datagram length".into(),
+        source: None,
     };
     assert_eq!(
         err.to_string(),
@@ -108,6 +109,7 @@ fn error_variants_are_cloneable() {
         Error::H3DatagramError {
             kind: H3DatagramErrorKind::Generic,
             message: "parse failed".into(),
+            source: None,
         },
     ];
     for err in variants {
