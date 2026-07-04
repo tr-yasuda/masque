@@ -533,7 +533,7 @@ fn capsule_decode_wraps_invalid_varint_header_in_h3_datagram_error_from_public_a
 }
 
 #[test]
-fn capsule_parser_round_trips_known_and_unknown_types() {
+fn capsule_parser_skips_unknown_types_and_yields_known_types() {
     let datagram = Capsule::new(CapsuleType::DATAGRAM, vec![0xde, 0xad]).unwrap();
     let unknown = Capsule::new(CapsuleType::new(0x2bad).unwrap(), vec![0xbe, 0xef]).unwrap();
 
@@ -542,7 +542,6 @@ fn capsule_parser_round_trips_known_and_unknown_types() {
 
     let mut parser = CapsuleParser::new();
     assert_eq!(parser.feed(&encoded).unwrap(), Some(datagram));
-    assert_eq!(parser.feed(&[]).unwrap(), Some(unknown));
     assert_eq!(parser.feed(&[]).unwrap(), None);
 }
 
