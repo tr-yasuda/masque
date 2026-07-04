@@ -11,6 +11,27 @@ use std::process::{Command, ExitCode};
 
 type CheckFn = fn() -> ExitCode;
 
+/// The CI checks run by `cargo xtask ci`, in order.
+const CI_CHECKS: &[(&str, CheckFn)] = &[
+    ("fmt", run_fmt),
+    ("clippy", run_clippy),
+    ("doc", run_doc),
+    ("test", run_test),
+];
+
+/// Help text shared by `print_help` and the unit tests.
+const HELP_TEXT: &str = concat!(
+    "Development tasks for the masque workspace.\n\n",
+    "Usage: cargo xtask <task>\n\n",
+    "Tasks:\n",
+    "  ci      Run fmt, clippy, doc, and test checks\n",
+    "  fmt     Run cargo fmt --all -- --check\n",
+    "  clippy  Run cargo clippy --workspace --all-targets --locked -- -D warnings\n",
+    "  doc     Run cargo doc --workspace --no-deps --document-private-items --locked (RUSTDOCFLAGS=-D warnings)\n",
+    "  test    Run cargo test --workspace --locked\n",
+    "  help    Print this message\n",
+);
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     let task = args.get(1).map_or("help", String::as_str);
@@ -29,15 +50,8 @@ fn main() -> ExitCode {
 }
 
 fn run_ci() -> ExitCode {
-    let checks: &[(&str, CheckFn)] = &[
-        ("fmt", run_fmt),
-        ("clippy", run_clippy),
-        ("doc", run_doc),
-        ("test", run_test),
-    ];
-
     let mut failed = Vec::new();
-    for (name, check) in checks {
+    for (name, check) in CI_CHECKS {
         println!("\nRunning {name} check...");
         if check() != ExitCode::SUCCESS {
             failed.push(*name);
@@ -105,17 +119,7 @@ fn run_command(cmd: &mut Command) -> ExitCode {
 }
 
 fn print_help() {
-    println!("Development tasks for the masque workspace.\n");
-    println!("Usage: cargo xtask <task>\n");
-    println!("Tasks:");
-    println!("  ci      Run fmt, clippy, doc, and test checks");
-    println!("  fmt     Run cargo fmt --all -- --check");
-    println!("  clippy  Run cargo clippy --workspace --all-targets --locked -- -D warnings");
-    println!(
-        "  doc     Run cargo doc --workspace --no-deps --document-private-items --locked (RUSTDOCFLAGS=-D warnings)"
-    );
-    println!("  test    Run cargo test --workspace --locked");
-    println!("  help    Print this message");
+    print!("{HELP_TEXT}");
 }
 
 #[cfg(test)]
@@ -123,44 +127,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unknown_task_prints_help() {
-        // We cannot easily change argv in a unit test, but we can verify the
-        // help text contains the expected commands.
-        let help = format_help();
-        assert!(help.contains("ci"));
-        assert!(help.contains("fmt"));
-        assert!(help.contains("clippy"));
-        assert!(help.contains("doc"));
-        assert!(help.contains("test"));
-        assert!(help.contains("--locked"));
-    }
-
-    fn format_help() -> String {
-        let mut output = String::new();
-        output.push_str("Development tasks for the masque workspace.\n\n");
-        output.push_str("Usage: cargo xtask <task>\n\n");
-        output.push_str("Tasks:\n");
-        output.push_str("  ci      Run fmt, clippy, doc, and test checks\n");
-        output.push_str("  fmt     Run cargo fmt --all -- --check\n");
-        output.push_str(
-            "  clippy  Run cargo clippy --workspace --all-targets --locked -- -D warnings\n",
-        );
-        output.push_str("  doc     Run cargo doc --workspace --no-deps --document-private-items --locked (RUSTDOCFLAGS=-D warnings)\n");
-        output.push_str("  test    Run cargo test --workspace --locked\n");
-        output.push_str("  help    Print this message\n");
-        output
+    fn help_text_contains_expected_commands() {
+        assert!(HELP_TEXT.contains("ci"));
+        assert!(HELP_TEXT.contains("fmt"));
+        assert!(HELP_TEXT.contains("clippy"));
+        assert!(HELP_TEXT.contains("doc"));
+        assert!(HELP_TEXT.contains("test"));
+        assert!(HELP_TEXT.contains("--locked"));
     }
 
     #[test]
-    fn checks_slice_is_non_empty() {
-        let checks: &[(&str, CheckFn)] = &[
-            ("fmt", run_fmt),
-            ("clippy", run_clippy),
-            ("doc", run_doc),
-            ("test", run_test),
-        ];
-        assert!(!checks.is_empty());
-        let names: Vec<_> = checks.iter().map(|(name, _)| *name).collect();
+    fn unknown_task_prints_help() {
+        // Run the xtask binary with an unknown task via cargo, capturing stdout
+        // to verify the actual help path is exercised.
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let output = Command::new("cargo")
+            .current_dir(manifest_dir)
+            .args(["run", "--bin", "xtask", "--", "__unknown_task__"])
+            .output()
+            .expect("failed to run xtask");
+
+        assert!(output.status.success(), "xtask should exit successfully");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("ci"));
+        assert!(stdout.contains("fmt"));
+        assert!(stdout.contains("clippy"));
+        assert!(stdout.contains("doc"));
+        assert!(stdout.contains("test"));
+    }
+
+    #[test]
+    fn ci_checks_slice_matches_run_ci() {
+        // Ensure the list used by run_ci is the one tested here, so this test
+        // fails if the two drift apart.
+        let names: Vec<_> = CI_CHECKS.iter().map(|(name, _)| *name).collect();
         assert_eq!(names, vec!["fmt", "clippy", "doc", "test"]);
     }
 }

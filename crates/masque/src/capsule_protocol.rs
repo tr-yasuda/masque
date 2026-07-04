@@ -12,42 +12,64 @@
 /// header APIs without additional normalization.
 pub const CAPSULE_PROTOCOL: &str = "capsule-protocol";
 
+/// Errors that can occur when parsing a `Capsule-Protocol` header value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CapsuleProtocolError {
+    /// The header value was empty or contained only whitespace.
+    Empty,
+    /// The value was not a well-formed Boolean Structured Field.
+    Malformed,
+    /// The value was a valid structured field but not a boolean.
+    NotBoolean,
+    /// A boolean parameter was malformed.
+    InvalidParameter,
+}
+
 /// Parse a `Capsule-Protocol` header value as a Boolean Structured Field.
 ///
-/// Returns `Some(true)` for `?1` and `Some(false)` for `?0`. Optional
-/// surrounding SP characters and unknown parameters are handled as required
-/// by RFC 8941 and RFC 9297. Returns `None` for empty or malformed input, or
-/// for non-boolean values.
+/// Returns `Ok(true)` for `?1` and `Ok(false)` for `?0`. Optional surrounding
+/// SP characters and unknown parameters are handled as required by RFC 8941
+/// and RFC 9297.
 ///
 /// Per RFC 9297 Section 3.4, a `false` value has the same semantics as the
 /// header being absent. Callers that want to detect Capsule Protocol support
-/// should therefore check `result == Some(true)` rather than `is_some()`.
-#[must_use]
-pub fn parse_capsule_protocol(value: &str) -> Option<bool> {
+/// should therefore check `result == Ok(true)`.
+///
+/// # Errors
+///
+/// Returns [`CapsuleProtocolError::Empty`] for empty or whitespace-only input,
+/// [`CapsuleProtocolError::NotBoolean`] for non-boolean structured-field values,
+/// [`CapsuleProtocolError::Malformed`] for boolean values with trailing garbage,
+/// and [`CapsuleProtocolError::InvalidParameter`] for malformed parameters.
+pub fn parse_capsule_protocol(value: &str) -> Result<bool, CapsuleProtocolError> {
     let value = trim_sp(value);
     let bytes = value.as_bytes();
 
+    if bytes.is_empty() {
+        return Err(CapsuleProtocolError::Empty);
+    }
     if bytes.len() < 2 || bytes[0] != b'?' {
-        return None;
+        return Err(CapsuleProtocolError::NotBoolean);
     }
 
     let flag = match bytes[1] {
         b'1' => true,
         b'0' => false,
-        _ => return None,
+        _ => return Err(CapsuleProtocolError::NotBoolean),
     };
 
     let rest = &bytes[2..];
     if rest.is_empty() {
-        return Some(flag);
+        return Ok(flag);
     }
 
     if rest[0] != b';' {
-        return None;
+        return Err(CapsuleProtocolError::Malformed);
     }
 
-    parse_parameters(rest)?;
-    Some(flag)
+    parse_parameters(rest).ok_or(CapsuleProtocolError::InvalidParameter)?;
+    Ok(flag)
 }
 
 /// Serialize a boolean as a `Capsule-Protocol` header value.
@@ -354,117 +376,207 @@ mod tests {
     }
 
     #[test]
-    fn parse_true_boolean_value_returns_some_true() {
-        assert_eq!(parse_capsule_protocol("?1"), Some(true));
+    fn parse_true_boolean_value_returns_ok_true() {
+        assert_eq!(parse_capsule_protocol("?1"), Ok(true));
     }
 
     #[test]
-    fn parse_false_boolean_value_returns_some_false() {
-        assert_eq!(parse_capsule_protocol("?0"), Some(false));
+    fn parse_false_boolean_value_returns_ok_false() {
+        assert_eq!(parse_capsule_protocol("?0"), Ok(false));
     }
 
     #[test]
     fn parse_leading_and_trailing_sp_returns_boolean() {
-        assert_eq!(parse_capsule_protocol(" ?1"), Some(true));
-        assert_eq!(parse_capsule_protocol("?1 "), Some(true));
-        assert_eq!(parse_capsule_protocol("  ?1  "), Some(true));
+        assert_eq!(parse_capsule_protocol(" ?1"), Ok(true));
+        assert_eq!(parse_capsule_protocol("?1 "), Ok(true));
+        assert_eq!(parse_capsule_protocol("  ?1  "), Ok(true));
     }
 
     #[test]
-    fn parse_leading_or_trailing_htab_returns_none() {
-        assert_eq!(parse_capsule_protocol("\t?1"), None);
-        assert_eq!(parse_capsule_protocol("?1\t"), None);
-        assert_eq!(parse_capsule_protocol("\t?0\t"), None);
-    }
-
-    #[test]
-    fn parse_whitespace_after_parameter_separator_returns_boolean() {
-        assert_eq!(parse_capsule_protocol("?1; foo=bar"), Some(true));
-        assert_eq!(parse_capsule_protocol("?0; foo"), Some(false));
-    }
-
-    #[test]
-    fn parse_whitespace_before_parameter_separator_returns_none() {
-        assert_eq!(parse_capsule_protocol("?1 ;foo=bar"), None);
-        assert_eq!(parse_capsule_protocol("?0\t;foo"), None);
-    }
-
-    #[test]
-    fn parse_unknown_parameters_returns_boolean() {
-        assert_eq!(parse_capsule_protocol("?1;foo=bar"), Some(true));
-        assert_eq!(parse_capsule_protocol("?0;foo"), Some(false));
-        assert_eq!(parse_capsule_protocol(" ?1;ext=1 "), Some(true));
+    fn parse_leading_or_trailing_htab_returns_error() {
+        // `trim_sp` strips only SP characters; HTAB is preserved. A leading
+        // HTAB prevents the value from starting with `?`, while a trailing HTAB
+        // follows the boolean flag without a parameter separator.
         assert_eq!(
-            parse_capsule_protocol("?1;a=1;b=?0;c=:dGVzdA==:"),
-            Some(true)
+            parse_capsule_protocol("\t?1"),
+            Err(CapsuleProtocolError::NotBoolean)
+        );
+        assert_eq!(
+            parse_capsule_protocol("?1\t"),
+            Err(CapsuleProtocolError::Malformed)
+        );
+        assert_eq!(
+            parse_capsule_protocol("\t?0\t"),
+            Err(CapsuleProtocolError::NotBoolean)
         );
     }
 
     #[test]
-    fn parse_invalid_value_returns_none() {
-        assert_eq!(parse_capsule_protocol("true"), None);
-        assert_eq!(parse_capsule_protocol("false"), None);
-        assert_eq!(parse_capsule_protocol("1"), None);
-        assert_eq!(parse_capsule_protocol("?2"), None);
-        assert_eq!(parse_capsule_protocol("?1foo"), None);
-        // Non-ASCII after `?` must not panic on a char boundary.
-        assert_eq!(parse_capsule_protocol("?é"), None);
-        assert_eq!(parse_capsule_protocol(" ?é "), None);
+    fn parse_whitespace_after_parameter_separator_returns_boolean() {
+        assert_eq!(parse_capsule_protocol("?1; foo=bar"), Ok(true));
+        assert_eq!(parse_capsule_protocol("?0; foo"), Ok(false));
     }
 
     #[test]
-    fn parse_malformed_parameters_returns_none() {
-        assert_eq!(parse_capsule_protocol("?1;"), None);
-        assert_eq!(parse_capsule_protocol("?1;Bad"), None);
-        assert_eq!(parse_capsule_protocol("?1;foo=\"unterminated"), None);
-        assert_eq!(parse_capsule_protocol("?1;foo =bar"), None);
-        assert_eq!(parse_capsule_protocol("?1;foo=?"), None);
+    fn parse_whitespace_before_parameter_separator_returns_malformed() {
+        assert_eq!(
+            parse_capsule_protocol("?1 ;foo=bar"),
+            Err(CapsuleProtocolError::Malformed)
+        );
+        assert_eq!(
+            parse_capsule_protocol("?0\t;foo"),
+            Err(CapsuleProtocolError::Malformed)
+        );
+    }
+
+    #[test]
+    fn parse_unknown_parameters_returns_boolean() {
+        assert_eq!(parse_capsule_protocol("?1;foo=bar"), Ok(true));
+        assert_eq!(parse_capsule_protocol("?0;foo"), Ok(false));
+        assert_eq!(parse_capsule_protocol(" ?1;ext=1 "), Ok(true));
+        assert_eq!(parse_capsule_protocol("?1;a=1;b=?0;c=:dGVzdA==:"), Ok(true));
+    }
+
+    #[test]
+    fn parse_invalid_value_returns_error() {
+        assert_eq!(
+            parse_capsule_protocol("true"),
+            Err(CapsuleProtocolError::NotBoolean)
+        );
+        assert_eq!(
+            parse_capsule_protocol("false"),
+            Err(CapsuleProtocolError::NotBoolean)
+        );
+        assert_eq!(
+            parse_capsule_protocol("1"),
+            Err(CapsuleProtocolError::NotBoolean)
+        );
+        assert_eq!(
+            parse_capsule_protocol("?2"),
+            Err(CapsuleProtocolError::NotBoolean)
+        );
+        assert_eq!(
+            parse_capsule_protocol("?1foo"),
+            Err(CapsuleProtocolError::Malformed)
+        );
+        // Non-ASCII after `?` must not panic on a char boundary.
+        assert_eq!(
+            parse_capsule_protocol("?é"),
+            Err(CapsuleProtocolError::NotBoolean)
+        );
+        assert_eq!(
+            parse_capsule_protocol(" ?é "),
+            Err(CapsuleProtocolError::NotBoolean)
+        );
+    }
+
+    #[test]
+    fn parse_malformed_parameters_returns_invalid_parameter() {
+        assert_eq!(
+            parse_capsule_protocol("?1;"),
+            Err(CapsuleProtocolError::InvalidParameter)
+        );
+        assert_eq!(
+            parse_capsule_protocol("?1;Bad"),
+            Err(CapsuleProtocolError::InvalidParameter)
+        );
+        assert_eq!(
+            parse_capsule_protocol("?1;foo=\"unterminated"),
+            Err(CapsuleProtocolError::InvalidParameter)
+        );
+        assert_eq!(
+            parse_capsule_protocol("?1;foo =bar"),
+            Err(CapsuleProtocolError::InvalidParameter)
+        );
+        assert_eq!(
+            parse_capsule_protocol("?1;foo=?"),
+            Err(CapsuleProtocolError::InvalidParameter)
+        );
     }
 
     #[test]
     fn parse_unpadded_binary_parameter_returns_boolean() {
-        assert_eq!(parse_capsule_protocol("?1;foo=:Zg:"), Some(true));
-        assert_eq!(parse_capsule_protocol("?1;foo=:ZGVzdA:"), Some(true));
+        assert_eq!(parse_capsule_protocol("?1;foo=:Zg:"), Ok(true));
+        assert_eq!(parse_capsule_protocol("?1;foo=:ZGVzdA:"), Ok(true));
     }
 
     #[test]
-    fn parse_undecodable_binary_parameter_returns_none() {
+    fn parse_undecodable_binary_parameter_returns_invalid_parameter() {
         // Length that would require three padding characters.
-        assert_eq!(parse_capsule_protocol("?1;foo=:A:"), None);
+        assert_eq!(
+            parse_capsule_protocol("?1;foo=:A:"),
+            Err(CapsuleProtocolError::InvalidParameter)
+        );
         // Explicit padding inconsistent with content length.
-        assert_eq!(parse_capsule_protocol("?1;foo=:Zg=:"), None);
+        assert_eq!(
+            parse_capsule_protocol("?1;foo=:Zg=:"),
+            Err(CapsuleProtocolError::InvalidParameter)
+        );
         // Padding bits are not zero.
-        assert_eq!(parse_capsule_protocol("?1;foo=:Zh==:"), None);
+        assert_eq!(
+            parse_capsule_protocol("?1;foo=:Zh==:"),
+            Err(CapsuleProtocolError::InvalidParameter)
+        );
     }
 
     #[test]
-    fn parse_non_boolean_structured_field_values_returns_none() {
-        assert_eq!(parse_capsule_protocol("\"foo\""), None);
-        assert_eq!(parse_capsule_protocol("foo"), None);
-        assert_eq!(parse_capsule_protocol("42"), None);
-        assert_eq!(parse_capsule_protocol(":abc:"), None);
-        assert_eq!(parse_capsule_protocol("?1, ?1"), None);
+    fn parse_non_boolean_structured_field_values_returns_not_boolean() {
+        assert_eq!(
+            parse_capsule_protocol("\"foo\""),
+            Err(CapsuleProtocolError::NotBoolean)
+        );
+        assert_eq!(
+            parse_capsule_protocol("foo"),
+            Err(CapsuleProtocolError::NotBoolean)
+        );
+        assert_eq!(
+            parse_capsule_protocol("42"),
+            Err(CapsuleProtocolError::NotBoolean)
+        );
+        assert_eq!(
+            parse_capsule_protocol(":abc:"),
+            Err(CapsuleProtocolError::NotBoolean)
+        );
+        assert_eq!(
+            parse_capsule_protocol("?1, ?1"),
+            Err(CapsuleProtocolError::Malformed)
+        );
     }
 
     #[test]
     fn parse_number_parameter_limits_are_enforced() {
         // Integer with more than 15 digits.
-        assert_eq!(parse_capsule_protocol("?1;foo=1234567890123456"), None);
+        assert_eq!(
+            parse_capsule_protocol("?1;foo=1234567890123456"),
+            Err(CapsuleProtocolError::InvalidParameter)
+        );
         // Decimal with more than 12 integer digits.
-        assert_eq!(parse_capsule_protocol("?1;foo=1234567890123.0"), None);
+        assert_eq!(
+            parse_capsule_protocol("?1;foo=1234567890123.0"),
+            Err(CapsuleProtocolError::InvalidParameter)
+        );
         // Decimal with more than 3 fractional digits.
-        assert_eq!(parse_capsule_protocol("?1;foo=1.1234"), None);
+        assert_eq!(
+            parse_capsule_protocol("?1;foo=1.1234"),
+            Err(CapsuleProtocolError::InvalidParameter)
+        );
     }
 
     #[test]
     fn parse_string_parameter_rejects_non_ascii() {
-        assert_eq!(parse_capsule_protocol("?1;foo=\"é\""), None);
+        assert_eq!(
+            parse_capsule_protocol("?1;foo=\"é\""),
+            Err(CapsuleProtocolError::InvalidParameter)
+        );
     }
 
     #[test]
-    fn parse_empty_or_whitespace_value_returns_none() {
-        assert_eq!(parse_capsule_protocol(""), None);
-        assert_eq!(parse_capsule_protocol("   "), None);
+    fn parse_empty_or_whitespace_value_returns_empty() {
+        assert_eq!(parse_capsule_protocol(""), Err(CapsuleProtocolError::Empty));
+        assert_eq!(
+            parse_capsule_protocol("   "),
+            Err(CapsuleProtocolError::Empty)
+        );
     }
 
     #[test]
@@ -472,7 +584,7 @@ mod tests {
         for value in [true, false] {
             assert_eq!(
                 parse_capsule_protocol(serialize_capsule_protocol(value)),
-                Some(value)
+                Ok(value)
             );
         }
     }

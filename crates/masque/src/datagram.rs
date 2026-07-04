@@ -1,10 +1,7 @@
 //! HTTP Datagram payload types per RFC 9297.
 
-use crate::quic_varint;
+use crate::quic_varint::{self, MAX_VARINT};
 use crate::{Error, H3DatagramErrorKind, Result};
-
-/// The largest stream ID allowed by QUIC (RFC 9000 Section 2.1).
-const MAX_QUIC_STREAM_ID: u64 = (1 << 62) - 1;
 
 /// The largest Quarter Stream ID allowed in an HTTP/3 Datagram (RFC 9297
 /// Section 2.1).
@@ -13,7 +10,6 @@ const MAX_QUIC_STREAM_ID: u64 = (1 << 62) - 1;
 /// streams, the full stream ID is always a multiple of four. The Quarter Stream
 /// ID is therefore `stream_id / 4` and must not exceed `2^60 - 1`.
 pub const MAX_QUARTER_STREAM_ID: u64 = (1 << 60) - 1;
-
 /// A payload carried by an HTTP Datagram.
 ///
 /// HTTP Datagrams are defined by RFC 9297 as a convention for conveying
@@ -31,7 +27,7 @@ pub const MAX_QUARTER_STREAM_ID: u64 = (1 << 60) - 1;
 /// `HttpDatagram` does not impose a payload-size limit. The actual limit is
 /// negotiated by the HTTP/3 connection (`max_datagram_frame_size`) and is
 /// enforced by the transport layer when encoding frames or capsules.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HttpDatagram {
     /// The request stream identifier with which this datagram is associated.
     ///
@@ -117,18 +113,18 @@ impl HttpDatagram {
     /// Returns [`crate::Error::H3DatagramError`] if the Quarter Stream ID is
     /// missing, malformed, or exceeds [`MAX_QUARTER_STREAM_ID`].
     pub fn decode_h3(buf: &[u8]) -> Result<Self> {
-        let (quarter_stream_id, consumed) =
-            quic_varint::decode(buf).map_err(|e| Error::H3DatagramError {
-                kind: H3DatagramErrorKind::InvalidVarint,
-                message: "invalid quarter stream ID".into(),
-                source: Some(Box::new(e)),
-            })?;
+        let (quarter_stream_id, consumed) = quic_varint::decode(buf).map_err(|e| {
+            Error::h3_datagram_error_with_source(
+                H3DatagramErrorKind::InvalidVarint,
+                "invalid quarter stream ID",
+                e,
+            )
+        })?;
         if quarter_stream_id > MAX_QUARTER_STREAM_ID {
-            return Err(Error::H3DatagramError {
-                kind: H3DatagramErrorKind::VarintOutOfRange,
-                message: "quarter stream ID exceeds 2^60 - 1".into(),
-                source: None,
-            });
+            return Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::VarintOutOfRange,
+                "quarter stream ID exceeds 2^60 - 1",
+            ));
         }
         let stream_id = quarter_stream_id * 4;
         // The preceding guard guarantees that `stream_id` is a valid
@@ -139,19 +135,17 @@ impl HttpDatagram {
     }
 
     fn validate_stream_id(stream_id: u64) -> Result<()> {
-        if stream_id > MAX_QUIC_STREAM_ID {
-            return Err(Error::H3DatagramError {
-                kind: H3DatagramErrorKind::Generic,
-                message: "stream ID exceeds the maximum QUIC stream ID".into(),
-                source: None,
-            });
+        if stream_id > MAX_VARINT {
+            return Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::Generic,
+                "stream ID exceeds the maximum QUIC stream ID",
+            ));
         }
         if stream_id % 4 != 0 {
-            return Err(Error::H3DatagramError {
-                kind: H3DatagramErrorKind::Generic,
-                message: "stream ID is not a client-initiated bidirectional stream ID".into(),
-                source: None,
-            });
+            return Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::Generic,
+                "stream ID is not a client-initiated bidirectional stream ID",
+            ));
         }
         Ok(())
     }
@@ -249,12 +243,23 @@ mod tests {
 
     #[test]
     fn http_datagram_rejects_stream_id_above_quic_limit() {
-        let err = HttpDatagram::new(MAX_QUIC_STREAM_ID + 1, vec![1]).unwrap_err();
+        let err = HttpDatagram::new(MAX_VARINT + 1, vec![1]).unwrap_err();
         assert!(matches!(err, Error::H3DatagramError { .. }));
         assert!(
             err.to_string()
                 .contains("exceeds the maximum QUIC stream ID")
         );
+    }
+
+    #[test]
+    fn http_datagram_accepts_maximum_valid_stream_id() {
+        // The largest valid client-initiated bidirectional stream ID is the
+        // largest value congruent to 0 mod 4 within the QUIC varint range.
+        let max_valid = MAX_VARINT - 3;
+        assert_eq!(max_valid % 4, 0);
+
+        let datagram = HttpDatagram::new(max_valid, vec![1]).unwrap();
+        assert_eq!(datagram.stream_id(), max_valid);
     }
 
     /// A small example payload type used to exercise the [`DatagramPayload`] trait.
@@ -299,11 +304,10 @@ mod tests {
         }
 
         fn decode(_payload: &[u8]) -> std::result::Result<Self, Self::Error> {
-            Err(Error::H3DatagramError {
-                kind: H3DatagramErrorKind::Generic,
-                message: "malformed payload".into(),
-                source: None,
-            })
+            Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::Generic,
+                "malformed payload",
+            ))
         }
     }
 

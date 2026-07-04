@@ -5,16 +5,53 @@
 
 use std::io::{BufRead, BufReader};
 use std::net::{SocketAddr, UdpSocket};
-use std::path::Path;
-use std::process::{Command, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 use masque::quic_varint::{self, MAX_VARINT};
 use masque::{
-    CAPSULE_PROTOCOL, Capsule, CapsuleType, Config, DatagramPayload, Error, H3DatagramErrorKind,
-    H3DatagramSettingValue, HttpDatagram, Protocol, SETTINGS_H3_DATAGRAM, Session, VarIntErrorKind,
-    parse_capsule_protocol, serialize_capsule_protocol, validate_h3_datagram_setting_value,
+    CAPSULE_PROTOCOL, Capsule, CapsuleProtocolError, CapsuleType, Config, DatagramPayload, Error,
+    H3DatagramErrorKind, H3DatagramSettingValue, HttpDatagram, Protocol, SETTINGS_H3_DATAGRAM,
+    Session, VarIntErrorKind, parse_capsule_protocol, serialize_capsule_protocol,
+    validate_h3_datagram_setting_value,
 };
+
+/// RAII guard that kills a spawned child process when dropped.
+struct KillOnDrop(Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Resolve the Cargo target directory for this workspace.
+///
+/// Honors `CARGO_TARGET_DIR` when set, otherwise falls back to the default
+/// `target` directory at the workspace root.
+fn target_dir() -> PathBuf {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir.join("../..");
+
+    match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(target_dir) => {
+            let target_dir = PathBuf::from(target_dir);
+            if target_dir.is_absolute() {
+                target_dir
+            } else {
+                // Cargo resolves relative CARGO_TARGET_DIR against the current
+                // working directory. The test builds from the crate manifest
+                // directory, so resolve relative to that.
+                manifest_dir.join(target_dir)
+            }
+        }
+        None => workspace_root.join("target"),
+    }
+}
 
 #[test]
 fn config_parses_and_exposes_socket_addresses() {
@@ -76,14 +113,13 @@ fn not_implemented_error_can_be_created() {
 
 #[test]
 fn h3_datagram_error_can_be_created() {
-    let err = Error::H3DatagramError {
-        kind: H3DatagramErrorKind::Generic,
-        message: "invalid datagram length".into(),
-        source: None,
-    };
+    // Note: Error::H3DatagramError can only be constructed inside the crate,
+    // so this integration test only verifies the Display text via an error
+    // produced by the public API.
+    let err = HttpDatagram::new(1, b"hello").unwrap_err();
     assert_eq!(
         err.to_string(),
-        "HTTP/3 datagram or capsule protocol error (0x33): invalid datagram length"
+        "HTTP/3 datagram or capsule protocol error (0x33): stream ID is not a client-initiated bidirectional stream ID"
     );
 }
 
@@ -106,11 +142,8 @@ fn error_variants_are_cloneable() {
             previous: 1,
             received: 0,
         },
-        Error::H3DatagramError {
-            kind: H3DatagramErrorKind::Generic,
-            message: "parse failed".into(),
-            source: None,
-        },
+        // H3DatagramError is omitted here because its message can only be
+        // constructed inside the crate; clone/equality is covered by unit tests.
     ];
     for err in variants {
         let cloned = err.clone();
@@ -418,15 +451,18 @@ fn capsule_protocol_header_name_is_accessible_at_crate_root() {
 
 #[test]
 fn capsule_protocol_parses_and_serializes_at_crate_root() {
-    assert_eq!(parse_capsule_protocol("?1"), Some(true));
-    assert_eq!(parse_capsule_protocol("?0"), Some(false));
-    assert_eq!(parse_capsule_protocol(" ?1;foo=bar "), Some(true));
-    assert_eq!(parse_capsule_protocol("true"), None);
+    assert_eq!(parse_capsule_protocol("?1"), Ok(true));
+    assert_eq!(parse_capsule_protocol("?0"), Ok(false));
+    assert_eq!(parse_capsule_protocol(" ?1;foo=bar "), Ok(true));
+    assert_eq!(
+        parse_capsule_protocol("true"),
+        Err(CapsuleProtocolError::NotBoolean)
+    );
 
     for value in [true, false] {
         assert_eq!(
             parse_capsule_protocol(serialize_capsule_protocol(value)),
-            Some(value)
+            Ok(value)
         );
     }
 }
@@ -500,29 +536,40 @@ fn capsule_decode_wraps_invalid_varint_header_in_h3_datagram_error_from_public_a
 fn udp_echo_server_example_echoes_datagrams() {
     // Build the example binary so we can run it directly (avoiding the cargo
     // wrapper, which makes process cleanup easier).
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let build_status = Command::new("cargo")
+        .current_dir(manifest_dir)
         .args(["build", "--example", "udp_echo_server"])
         .status()
         .expect("cargo should be available");
     assert!(build_status.success(), "failed to build udp_echo_server");
 
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let exe = Path::new(manifest_dir)
-        .join("../../target/debug/examples/udp_echo_server")
+    let exe = target_dir()
+        .join("debug/examples/udp_echo_server")
         .with_extension(if cfg!(windows) { "exe" } else { "" });
 
-    let mut server = Command::new(exe)
+    let mut server = Command::new(&exe)
         .arg("127.0.0.1:0")
         .stdout(Stdio::piped())
         .spawn()
         .expect("failed to spawn udp_echo_server");
 
     let stdout = server.stdout.take().expect("server stdout not captured");
-    let mut reader = BufReader::new(stdout).lines();
-    let first_line = reader
-        .next()
-        .expect("server produced no output")
-        .expect("failed to read server output");
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stdout).lines();
+        tx.send(reader.next().transpose())
+            .expect("failed to send server output");
+    });
+
+    let first_line = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("server did not produce output within timeout")
+        .expect("failed to read server output")
+        .expect("server produced no output");
+
+    // Wrap the Child in a guard so it is killed even if an assertion panics.
+    let mut server = KillOnDrop(server);
 
     // Parse "UDP echo server listening on 127.0.0.1:PORT"
     let addr: SocketAddr = first_line
@@ -536,13 +583,28 @@ fn udp_echo_server_example_echoes_datagrams() {
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
 
-    client.send(b"hello").expect("failed to send");
+    // UDP is lossy even on loopback; retry a few times before giving up.
     let mut buf = [0u8; 1024];
-    let n = client
-        .recv(&mut buf)
-        .expect("failed to receive echo within timeout");
-    assert_eq!(&buf[..n], b"hello");
+    let mut echoed = false;
+    for attempt in 0..3 {
+        client.send(b"hello").expect("failed to send");
+        match client.recv(&mut buf) {
+            Ok(n) => {
+                assert_eq!(&buf[..n], b"hello");
+                echoed = true;
+                break;
+            }
+            Err(e) if attempt < 2 => {
+                eprintln!("Echo attempt {attempt} failed: {e}; retrying...");
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => panic!("failed to receive echo within timeout: {e}"),
+        }
+    }
+    assert!(echoed, "server did not echo the datagram");
 
-    let _ = server.kill();
-    let _ = server.wait();
+    // Explicit cleanup is still good practice, but the Drop guard above ensures
+    // the process is terminated even if a panic unwinds past this point.
+    let _ = server.0.kill();
+    let _ = server.0.wait();
 }
