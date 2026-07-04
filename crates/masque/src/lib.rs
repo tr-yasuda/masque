@@ -18,11 +18,12 @@
 
 pub mod config;
 pub mod error;
+pub mod quic_varint;
 pub mod settings;
 pub mod types;
 
 pub use config::Config;
-pub use error::{Error, H3_DATAGRAM_ERROR_CODE, Result};
+pub use error::{Error, H3_DATAGRAM_ERROR_CODE, Result, VarIntErrorKind};
 pub use settings::{
     H3DatagramSettingValue, SETTINGS_H3_DATAGRAM, validate_h3_datagram_setting_value,
 };

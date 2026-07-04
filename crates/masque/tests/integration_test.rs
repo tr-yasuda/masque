@@ -9,9 +9,10 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use masque::quic_varint::{self, MAX_VARINT};
 use masque::{
     Config, Error, H3DatagramSettingValue, Protocol, SETTINGS_H3_DATAGRAM, Session,
-    validate_h3_datagram_setting_value,
+    VarIntErrorKind, validate_h3_datagram_setting_value,
 };
 
 #[test]
@@ -260,6 +261,103 @@ fn session_rejects_duplicate_local_h3_datagram_value() {
             received: 0,
         }
     ));
+}
+
+#[test]
+fn invalid_var_int_error_can_be_created() {
+    let err = Error::InvalidVarInt {
+        kind: VarIntErrorKind::BufferTooShort,
+        message: "buffer too short".into(),
+    };
+    assert!(err.to_string().contains("buffer too short"));
+}
+
+#[test]
+fn quic_varint_round_trips_boundary_values() {
+    let values = [
+        0u64,
+        63,
+        64,
+        16_383,
+        16_384,
+        1_073_741_823,
+        1_073_741_824,
+        MAX_VARINT,
+    ];
+    for value in values {
+        let encoded = quic_varint::encode(value);
+        let (decoded, consumed) = quic_varint::decode(&encoded).unwrap();
+        assert_eq!(decoded, value);
+        assert_eq!(consumed, encoded.len());
+    }
+}
+
+#[test]
+fn quic_varint_decode_rejects_invalid_input() {
+    let err = quic_varint::decode(&[]).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::InvalidVarInt {
+            kind: VarIntErrorKind::EmptyBuffer,
+            ..
+        }
+    ));
+
+    let err = quic_varint::decode(&[0x40]).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::InvalidVarInt {
+            kind: VarIntErrorKind::BufferTooShort,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn quic_varint_decode_accepts_overlong_encodings() {
+    // RFC 9000 Section 16 allows overlong encodings except for Frame Type.
+    assert_eq!(quic_varint::decode(&[0x40, 0x05]).unwrap(), (5, 2));
+    assert_eq!(
+        quic_varint::decode(&[0x80, 0x00, 0x00, 0x05]).unwrap(),
+        (5, 4)
+    );
+    assert_eq!(
+        quic_varint::decode(&[0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05]).unwrap(),
+        (5, 8)
+    );
+}
+
+#[test]
+fn quic_varint_try_encode_rejects_oversized_values() {
+    let err = quic_varint::try_encode(MAX_VARINT + 1).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::InvalidVarInt {
+            kind: VarIntErrorKind::ValueTooLarge,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn quic_varint_encode_into_writes_to_caller_buffer() {
+    let mut buf = [0u8; 8];
+    let n = quic_varint::encode_into(64, &mut buf).unwrap();
+    assert_eq!(n, 2);
+    assert_eq!(&buf[..n], &[0x40, 0x40]);
+}
+
+#[test]
+fn quic_varint_decode_at_reads_from_offset() {
+    let buf = &[0x00, 0x40, 0x40, 0xff];
+    let (value, consumed) = quic_varint::decode_at(buf, 1).unwrap();
+    assert_eq!(value, 64);
+    assert_eq!(consumed, 2);
+}
+
+#[test]
+fn max_varint_is_publicly_accessible() {
+    assert_eq!(MAX_VARINT, 4_611_686_018_427_387_903);
 }
 
 #[test]

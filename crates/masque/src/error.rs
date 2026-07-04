@@ -25,6 +25,14 @@ pub enum Error {
         message: String,
     },
 
+    /// The variable-length integer encoding or decoding failed.
+    InvalidVarInt {
+        /// The kind of varint failure.
+        kind: VarIntErrorKind,
+        /// A human-readable description of what is wrong.
+        message: String,
+    },
+
     /// A requested operation is not yet implemented.
     NotImplemented {
         /// Description of the missing feature.
@@ -69,11 +77,28 @@ pub enum Error {
     },
 }
 
+/// The kind of variable-length integer failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum VarIntErrorKind {
+    /// The buffer was empty.
+    EmptyBuffer,
+    /// The buffer was too short to contain the encoded integer.
+    BufferTooShort,
+    /// The offset was out of bounds.
+    OffsetOutOfBounds,
+    /// The value exceeds the maximum representable varint.
+    ValueTooLarge,
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::InvalidConfig { field, message } => {
                 write!(f, "invalid configuration for {field}: {message}")
+            }
+            Error::InvalidVarInt { kind, message } => {
+                write!(f, "invalid varint ({kind:?}): {message}")
             }
             Error::NotImplemented { message } => write!(f, "not implemented: {message}"),
             Error::H3DatagramSetting { setting, value } => write!(
@@ -209,6 +234,18 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "HTTP/3 setting 0x33 already negotiated with value 1; received conflicting value 0"
+        );
+    }
+
+    #[test]
+    fn invalid_var_int_display_includes_kind_and_message() {
+        let err = Error::InvalidVarInt {
+            kind: VarIntErrorKind::ValueTooLarge,
+            message: "value too large".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "invalid varint (ValueTooLarge): value too large"
         );
     }
 }
