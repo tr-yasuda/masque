@@ -17,3 +17,6 @@ target
 # if you prefer to share run configurations, use a global gitignore instead.
 .idea/
 
+# Isolated GitHub Issue worktrees
+.worktrees/
+
