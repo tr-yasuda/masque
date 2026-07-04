@@ -45,8 +45,8 @@ impl HttpDatagram {
     /// Returns [`crate::Error::H3DatagramError`] if `stream_id` violates the
     /// constraints above.
     pub fn new(stream_id: u64, payload: impl Into<Vec<u8>>) -> Result<Self> {
-        let payload = payload.into();
         Self::validate_stream_id(stream_id)?;
+        let payload = payload.into();
         Ok(Self { stream_id, payload })
     }
 
