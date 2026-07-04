@@ -18,6 +18,7 @@
 
 pub mod config;
 pub mod error;
+pub mod quic_varint;
 pub mod types;
 
 pub use config::Config;
