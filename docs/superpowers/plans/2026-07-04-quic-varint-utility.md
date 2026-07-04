@@ -1,10 +1,12 @@
 # QUIC Variable-Length Integer Utility Implementation Plan
 
+> **Status:** Superseded by the design spec at `docs/superpowers/specs/2026-07-04-quic-varint-utility-design.md`. This plan documents the original scaffolding; the final implementation includes additional API surface (`try_encode`, `encode_into`, `encode_into_at`, `decode_at`) and a structured `VarIntErrorKind` in `Error::InvalidVarInt`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement a self-contained `quic_varint` module that encodes and decodes RFC 9000 variable-length integers, exposed through the `masque` crate's public API.
 
-**Architecture:** Add a new `InvalidVarInt` error variant to the existing `Error` enum, create a focused `quic_varint` module with `encode`/`decode` functions, and re-export it from `lib.rs`. The module is pure standard-library Rust with no external dependencies.
+**Architecture:** Add a new `InvalidVarInt` error variant (carrying `VarIntErrorKind`) to the existing `Error` enum, create a focused `quic_varint` module with `encode`, `try_encode`, `encode_into`, `encode_into_at`, `decode`, and `decode_at` functions, and re-export it from `lib.rs`. The module is pure standard-library Rust with no external dependencies.
 
 **Tech Stack:** Rust 2024 edition, Cargo workspace, built-in `#[cfg(test)]` unit tests.
 
@@ -14,9 +16,9 @@
 
 | File | Responsibility |
 |---|---|
-| `crates/masque/src/error.rs` | Add `Error::InvalidVarInt` variant and its `Display` formatting. |
-| `crates/masque/src/quic_varint.rs` | New module containing `encode`, `decode`, and their unit tests. |
-| `crates/masque/src/lib.rs` | Re-export the new `quic_varint` module. |
+| `crates/masque/src/error.rs` | Add `Error::InvalidVarInt { kind: VarIntErrorKind, message: String }` and `VarIntErrorKind` enum. |
+| `crates/masque/src/quic_varint.rs` | New module containing `encode`, `try_encode`, `encode_into`, `encode_into_at`, `decode`, `decode_at`, and their unit tests. |
+| `crates/masque/src/lib.rs` | Re-export the new `quic_varint` module and `VarIntErrorKind`. |
 
 ---
 
@@ -26,46 +28,37 @@
 - Modify: `crates/masque/src/error.rs`
 - Test: `crates/masque/src/error.rs` (existing `#[cfg(test)] mod tests`)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1-3: Add `InvalidVarInt` and `VarIntErrorKind`**
 
-Add the following test to the existing `#[cfg(test)] mod tests` block in `crates/masque/src/error.rs`:
-
-```rust
-#[test]
-fn invalid_var_int_display_includes_message() {
-    let err = Error::InvalidVarInt {
-        message: "value too large".into(),
-    };
-    assert_eq!(err.to_string(), "invalid varint: value too large");
-}
-```
-
-- [ ] **Step 2: Run the failing test**
-
-Run:
-
-```bash
-cargo test --package masque invalid_var_int_display_includes_message -- --exact
-```
-
-Expected: compilation failure because `InvalidVarInt` does not exist.
-
-- [ ] **Step 3: Add the `InvalidVarInt` variant**
-
-Insert this arm into the `Error` enum in `crates/masque/src/error.rs` between `InvalidConfig` and `NotImplemented`:
+The final `Error::InvalidVarInt` variant carries both a structured `kind` and a human-readable `message`:
 
 ```rust
 /// The variable-length integer encoding or decoding failed.
 InvalidVarInt {
+    /// The kind of varint failure.
+    kind: VarIntErrorKind,
     /// A human-readable description of what is wrong.
     message: String,
 },
 ```
 
-Add this arm to the `fmt::Display` implementation:
+`VarIntErrorKind` is defined as:
 
 ```rust
-Error::InvalidVarInt { message } => write!(f, "invalid varint: {message}"),
+pub enum VarIntErrorKind {
+    EmptyBuffer,
+    BufferTooShort,
+    OffsetOutOfBounds,
+    ValueTooLarge,
+}
+```
+
+The `Display` implementation includes the kind:
+
+```rust
+Error::InvalidVarInt { kind, message } => {
+    write!(f, "invalid varint ({kind:?}): {message}")
+}
 ```
 
 - [ ] **Step 4: Run the passing test**

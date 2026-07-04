@@ -52,13 +52,15 @@ pub enum Error {
 }
 
 /// The kind of variable-length integer failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum VarIntErrorKind {
     /// The buffer was empty.
     EmptyBuffer,
     /// The buffer was too short to contain the encoded integer.
     BufferTooShort,
+    /// The offset was out of bounds.
+    OffsetOutOfBounds,
     /// The value exceeds the maximum representable varint.
     ValueTooLarge,
 }
@@ -69,7 +71,7 @@ impl fmt::Display for Error {
             Error::InvalidConfig { field, message } => {
                 write!(f, "invalid configuration for {field}: {message}")
             }
-            Error::InvalidVarInt { kind: _, message } => write!(f, "invalid varint: {message}"),
+            Error::InvalidVarInt { kind, message } => write!(f, "invalid varint ({kind:?}): {message}"),
             Error::NotImplemented { message } => write!(f, "not implemented: {message}"),
             Error::H3DatagramError { message } => write!(
                 f,
@@ -157,11 +159,14 @@ mod tests {
     }
 
     #[test]
-    fn invalid_var_int_display_includes_message() {
+    fn invalid_var_int_display_includes_kind_and_message() {
         let err = Error::InvalidVarInt {
             kind: VarIntErrorKind::ValueTooLarge,
             message: "value too large".into(),
         };
-        assert_eq!(err.to_string(), "invalid varint: value too large");
+        assert_eq!(
+            err.to_string(),
+            "invalid varint (ValueTooLarge): value too large"
+        );
     }
 }
