@@ -123,6 +123,16 @@ fn session_rejects_invalid_peer_h3_datagram_value() {
 }
 
 #[test]
+fn session_rejects_conflicting_peer_h3_datagram_renegotiation() {
+    let mut session = Session::new(Protocol::ConnectUdp);
+    session.negotiate_peer_h3_datagram(1).unwrap();
+    let err = session.negotiate_peer_h3_datagram(0).unwrap_err();
+    assert!(matches!(err, Error::H3SettingsConflict { .. }));
+    assert!(err.to_string().contains("already negotiated with value 1"));
+    assert!(err.to_string().contains("received conflicting value 0"));
+}
+
+#[test]
 fn udp_echo_server_example_echoes_datagrams() {
     // Build the example binary so we can run it directly (avoiding the cargo
     // wrapper, which makes process cleanup easier).

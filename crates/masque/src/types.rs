@@ -109,15 +109,17 @@ impl Session {
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::H3Settings`] if `value` is not `0` or `1`, or if
-    /// the setting has already been negotiated with a different value.
+    /// Returns [`crate::Error::H3Settings`] if `value` is not `0` or `1`.
+    /// Returns [`crate::Error::H3SettingsConflict`] if the setting has already
+    /// been negotiated with a different value.
     pub fn negotiate_peer_h3_datagram(&mut self, value: u64) -> Result<()> {
         crate::settings::validate_h3_datagram_setting_value(value)?;
         let enabled = value == 1;
         if self.caps.peer_h3_datagram_negotiated && self.caps.peer_h3_datagram != enabled {
-            return Err(crate::Error::H3Settings {
+            return Err(crate::Error::H3SettingsConflict {
                 setting: SETTINGS_H3_DATAGRAM,
-                value,
+                previous: if self.caps.peer_h3_datagram { 1 } else { 0 },
+                received: value,
             });
         }
         self.caps.peer_h3_datagram = enabled;
@@ -239,11 +241,16 @@ mod tests {
         let err = session.negotiate_peer_h3_datagram(0).unwrap_err();
         assert!(matches!(
             err,
-            Error::H3Settings {
+            Error::H3SettingsConflict {
                 setting: SETTINGS_H3_DATAGRAM,
-                value: 0,
+                previous: 1,
+                received: 0,
             }
         ));
+        assert_eq!(
+            err.to_string(),
+            "HTTP/3 setting 0x33 already negotiated with value 1; received conflicting value 0"
+        );
     }
 
     #[test]

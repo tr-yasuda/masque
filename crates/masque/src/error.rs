@@ -30,6 +30,16 @@ pub enum Error {
         /// The invalid value received from the peer.
         value: u64,
     },
+
+    /// An HTTP/3 setting was negotiated more than once with conflicting values.
+    H3SettingsConflict {
+        /// The setting identifier that was re-negotiated.
+        setting: u64,
+        /// The value that was already negotiated.
+        previous: u64,
+        /// The conflicting value received from the peer.
+        received: u64,
+    },
 }
 
 impl fmt::Display for Error {
@@ -42,6 +52,14 @@ impl fmt::Display for Error {
             Error::H3Settings { setting, value } => write!(
                 f,
                 "invalid HTTP/3 setting {setting:#x}: value must be 0 or 1, got {value}"
+            ),
+            Error::H3SettingsConflict {
+                setting,
+                previous,
+                received,
+            } => write!(
+                f,
+                "HTTP/3 setting {setting:#x} already negotiated with value {previous}; received conflicting value {received}"
             ),
         }
     }
@@ -87,6 +105,11 @@ mod tests {
                 setting: 0x33,
                 value: 2,
             },
+            Error::H3SettingsConflict {
+                setting: 0x33,
+                previous: 1,
+                received: 0,
+            },
         ];
         for err in errors {
             let cloned = err.clone();
@@ -104,6 +127,19 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "invalid HTTP/3 setting 0x33: value must be 0 or 1, got 2"
+        );
+    }
+
+    #[test]
+    fn h3_settings_conflict_display_includes_previous_and_received_values() {
+        let err = Error::H3SettingsConflict {
+            setting: 0x33,
+            previous: 1,
+            received: 0,
+        };
+        assert_eq!(
+            err.to_string(),
+            "HTTP/3 setting 0x33 already negotiated with value 1; received conflicting value 0"
         );
     }
 }
