@@ -6,7 +6,7 @@ use std::fmt;
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// Errors that can occur when using `masque`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Error {
     /// The provided configuration was invalid.

@@ -7,7 +7,7 @@
 //! Usage:
 //!
 //! ```text
-//! cargo run --package masque --example connect_udp_proxy -- 0.0.0.0:8443 127.0.0.1:53
+//! cargo run --package masque --example connect_udp_proxy -- 127.0.0.1:8443 127.0.0.1:53
 //! ```
 //!
 //! TODO:
@@ -18,17 +18,18 @@
 
 use std::env;
 
-use masque::Config;
+use masque::{Config, Error};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
-    let bind_addr = args.get(1).map_or("0.0.0.0:8443", String::as_str);
+    let bind_addr = args.get(1).map_or("127.0.0.1:8443", String::as_str);
     let peer_addr = args.get(2).map_or("127.0.0.1:53", String::as_str);
 
     let config = Config::new(bind_addr, peer_addr)?;
     println!("CONNECT-UDP proxy stub starting with config: {:?}", config);
-    println!("NOTE: This example is not yet implemented. See TODO comments.");
 
-    // TODO: Start HTTP/3 server, accept CONNECT-UDP, forward UDP.
-    Ok(())
+    Err(Error::NotImplemented {
+        message: "CONNECT-UDP proxy example is not yet implemented".into(),
+    }
+    .into())
 }

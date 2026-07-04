@@ -74,7 +74,7 @@ cargo run --package masque --example udp_echo_server -- 127.0.0.1:3456
 cargo run --package masque --example udp_echo_client -- 127.0.0.1:3456 "hello"
 
 # CONNECT-UDP proxy stub
-cargo run --package masque --example connect_udp_proxy -- 0.0.0.0:8443 127.0.0.1:53
+cargo run --package masque --example connect_udp_proxy -- 127.0.0.1:8443 127.0.0.1:53
 ```
 
 ## Roadmap

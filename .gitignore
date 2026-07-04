@@ -13,6 +13,7 @@ target
 # Contains mutation testing data
 **/mutants.out*/
 
-# RustRover / JetBrains
+# RustRover / JetBrains IDE metadata. This is project-local IDE configuration;
+# if you prefer to share run configurations, use a global gitignore instead.
 .idea/
 

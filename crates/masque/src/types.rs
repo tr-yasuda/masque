@@ -69,12 +69,6 @@ mod tests {
     }
 
     #[test]
-    fn session_stores_protocol() {
-        let session = Session::new(Protocol::ConnectUdp);
-        assert_eq!(session.protocol(), Protocol::ConnectUdp);
-    }
-
-    #[test]
     fn session_stores_all_protocol_variants() {
         for protocol in [
             Protocol::ConnectUdp,

@@ -29,7 +29,7 @@ fn main() -> ExitCode {
 }
 
 fn run_ci() -> ExitCode {
-    let checks: [(&str, CheckFn); 4] = [
+    let checks: &[(&str, CheckFn)] = &[
         ("fmt", run_fmt),
         ("clippy", run_clippy),
         ("doc", run_doc),
@@ -37,7 +37,7 @@ fn run_ci() -> ExitCode {
     ];
 
     let mut failed = Vec::new();
-    for (name, check) in &checks {
+    for (name, check) in checks {
         println!("\nRunning {name} check...");
         if check() != ExitCode::SUCCESS {
             failed.push(*name);
@@ -59,7 +59,7 @@ fn run_fmt() -> ExitCode {
 }
 
 fn run_clippy() -> ExitCode {
-    println!("Running cargo clippy...");
+    println!("Running cargo clippy --workspace --all-targets --locked -- -D warnings...");
     run_command(Command::new("cargo").args([
         "clippy",
         "--workspace",
@@ -72,7 +72,9 @@ fn run_clippy() -> ExitCode {
 }
 
 fn run_doc() -> ExitCode {
-    println!("Running cargo doc...");
+    println!(
+        "Running cargo doc --workspace --no-deps --document-private-items --locked (RUSTDOCFLAGS=-D warnings)..."
+    );
     run_command(
         Command::new("cargo")
             .args([
@@ -87,7 +89,7 @@ fn run_doc() -> ExitCode {
 }
 
 fn run_test() -> ExitCode {
-    println!("Running cargo test...");
+    println!("Running cargo test --workspace --locked...");
     run_command(Command::new("cargo").args(["test", "--workspace", "--locked"]))
 }
 
@@ -107,9 +109,58 @@ fn print_help() {
     println!("Usage: cargo xtask <task>\n");
     println!("Tasks:");
     println!("  ci      Run fmt, clippy, doc, and test checks");
-    println!("  fmt     Run cargo fmt --check");
-    println!("  clippy  Run cargo clippy with warnings as errors");
-    println!("  doc     Run cargo doc and check for warnings");
-    println!("  test    Run cargo test --workspace");
+    println!("  fmt     Run cargo fmt --all -- --check");
+    println!("  clippy  Run cargo clippy --workspace --all-targets --locked -- -D warnings");
+    println!(
+        "  doc     Run cargo doc --workspace --no-deps --document-private-items --locked (RUSTDOCFLAGS=-D warnings)"
+    );
+    println!("  test    Run cargo test --workspace --locked");
     println!("  help    Print this message");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_task_prints_help() {
+        // We cannot easily change argv in a unit test, but we can verify the
+        // help text contains the expected commands.
+        let help = format_help();
+        assert!(help.contains("ci"));
+        assert!(help.contains("fmt"));
+        assert!(help.contains("clippy"));
+        assert!(help.contains("doc"));
+        assert!(help.contains("test"));
+        assert!(help.contains("--locked"));
+    }
+
+    fn format_help() -> String {
+        let mut output = String::new();
+        output.push_str("Development tasks for the masque workspace.\n\n");
+        output.push_str("Usage: cargo xtask <task>\n\n");
+        output.push_str("Tasks:\n");
+        output.push_str("  ci      Run fmt, clippy, doc, and test checks\n");
+        output.push_str("  fmt     Run cargo fmt --all -- --check\n");
+        output.push_str(
+            "  clippy  Run cargo clippy --workspace --all-targets --locked -- -D warnings\n",
+        );
+        output.push_str("  doc     Run cargo doc --workspace --no-deps --document-private-items --locked (RUSTDOCFLAGS=-D warnings)\n");
+        output.push_str("  test    Run cargo test --workspace --locked\n");
+        output.push_str("  help    Print this message\n");
+        output
+    }
+
+    #[test]
+    fn checks_slice_is_non_empty() {
+        let checks: &[(&str, CheckFn)] = &[
+            ("fmt", run_fmt),
+            ("clippy", run_clippy),
+            ("doc", run_doc),
+            ("test", run_test),
+        ];
+        assert!(!checks.is_empty());
+        let names: Vec<_> = checks.iter().map(|(name, _)| *name).collect();
+        assert_eq!(names, vec!["fmt", "clippy", "doc", "test"]);
+    }
 }

@@ -27,8 +27,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("WARNING: This example is for local testing only.");
 
     // Largest possible UDP payload over IPv4. Datagrams larger than this are
-    // truncated by the OS before they reach user space.
-    let mut buf = [0u8; 65507];
+    // truncated by the OS before they reach user space. Using a Vec keeps the
+    // buffer off the stack in case this example is ever spawned on threads with
+    // limited stack space.
+    let mut buf = vec![0u8; 65507];
     loop {
         let (n, peer) = socket.recv_from(&mut buf)?;
         socket.send_to(&buf[..n], peer)?;
