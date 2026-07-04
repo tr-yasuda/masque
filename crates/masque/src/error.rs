@@ -19,6 +19,8 @@ pub enum Error {
 
     /// The variable-length integer encoding or decoding failed.
     InvalidVarInt {
+        /// The kind of varint failure.
+        kind: VarIntErrorKind,
         /// A human-readable description of what is wrong.
         message: String,
     },
@@ -30,13 +32,27 @@ pub enum Error {
     },
 }
 
+/// The kind of variable-length integer failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum VarIntErrorKind {
+    /// The buffer was empty.
+    EmptyBuffer,
+    /// The buffer was too short to contain the encoded integer.
+    BufferTooShort,
+    /// The encoding was not the shortest possible form.
+    NonCanonical,
+    /// The value exceeds the maximum representable varint.
+    ValueTooLarge,
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::InvalidConfig { field, message } => {
                 write!(f, "invalid configuration for {field}: {message}")
             }
-            Error::InvalidVarInt { message } => write!(f, "invalid varint: {message}"),
+            Error::InvalidVarInt { kind: _, message } => write!(f, "invalid varint: {message}"),
             Error::NotImplemented { message } => write!(f, "not implemented: {message}"),
         }
     }
@@ -81,6 +97,7 @@ mod tests {
     #[test]
     fn invalid_var_int_display_includes_message() {
         let err = Error::InvalidVarInt {
+            kind: VarIntErrorKind::ValueTooLarge,
             message: "value too large".into(),
         };
         assert_eq!(err.to_string(), "invalid varint: value too large");

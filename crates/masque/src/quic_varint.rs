@@ -1,6 +1,6 @@
 //! QUIC variable-length integer encoding and decoding (RFC 9000 Section 16).
 
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, VarIntErrorKind};
 
 /// Maximum value representable by a QUIC variable-length integer.
 pub const MAX_VARINT: u64 = 4_611_686_018_427_387_903; // 2^62 - 1
@@ -12,7 +12,8 @@ pub const MAX_VARINT: u64 = 4_611_686_018_427_387_903; // 2^62 - 1
 ///
 /// # Panics
 ///
-/// Panics if `value` is greater than [`MAX_VARINT`].
+/// Panics if `value` is greater than [`MAX_VARINT`]. For a checked
+/// alternative, see [`try_encode`].
 ///
 /// # Examples
 ///
@@ -24,7 +25,71 @@ pub const MAX_VARINT: u64 = 4_611_686_018_427_387_903; // 2^62 - 1
 /// ```
 pub fn encode(value: u64) -> Vec<u8> {
     assert!(value <= MAX_VARINT, "value exceeds 2^62 - 1");
+    encode_unchecked(value)
+}
 
+/// Encodes a value as a QUIC variable-length integer, returning an error if the
+/// value is out of range.
+///
+/// This is the fallible counterpart to [`encode`].
+///
+/// # Examples
+///
+/// ```
+/// use masque::quic_varint::{try_encode, MAX_VARINT};
+///
+/// assert_eq!(try_encode(64).unwrap(), vec![0x40, 0x40]);
+/// assert!(try_encode(MAX_VARINT + 1).is_err());
+/// ```
+pub fn try_encode(value: u64) -> Result<Vec<u8>> {
+    if value > MAX_VARINT {
+        return Err(Error::InvalidVarInt {
+            kind: VarIntErrorKind::ValueTooLarge,
+            message: format!("value {value} exceeds 2^62 - 1"),
+        });
+    }
+    Ok(encode_unchecked(value))
+}
+
+/// Encodes `value` into the provided buffer and returns the number of bytes
+/// written.
+///
+/// The buffer must be at least 1 byte long. The maximum possible encoded
+/// length is 8 bytes, so a `[u8; 8]` is sufficient for any valid value.
+///
+/// # Errors
+///
+/// Returns an error if `value` is greater than [`MAX_VARINT`] or if `buf` is
+/// too short to hold the encoded form.
+///
+/// # Examples
+///
+/// ```
+/// use masque::quic_varint::encode_into;
+///
+/// let mut buf = [0u8; 8];
+/// let n = encode_into(64, &mut buf).unwrap();
+/// assert_eq!(&buf[..n], &[0x40, 0x40]);
+/// ```
+pub fn encode_into(value: u64, buf: &mut [u8]) -> Result<usize> {
+    if value > MAX_VARINT {
+        return Err(Error::InvalidVarInt {
+            kind: VarIntErrorKind::ValueTooLarge,
+            message: format!("value {value} exceeds 2^62 - 1"),
+        });
+    }
+    let encoded = encode_unchecked(value);
+    if buf.len() < encoded.len() {
+        return Err(Error::InvalidVarInt {
+            kind: VarIntErrorKind::BufferTooShort,
+            message: "output buffer too short".into(),
+        });
+    }
+    buf[..encoded.len()].copy_from_slice(&encoded);
+    Ok(encoded.len())
+}
+
+fn encode_unchecked(value: u64) -> Vec<u8> {
     if value <= 0x3f {
         vec![value as u8]
     } else if value <= 0x3fff {
@@ -54,8 +119,44 @@ pub fn encode(value: u64) -> Vec<u8> {
 /// assert_eq!(consumed, 2);
 /// ```
 pub fn decode(buf: &[u8]) -> Result<(u64, usize)> {
+    decode_at(buf, 0)
+}
+
+/// Decodes a QUIC variable-length integer starting at `offset` within `buf`.
+///
+/// Returns the decoded value and the number of bytes consumed **from the
+/// start of the varint** (not from `offset`). Trailing bytes after the encoded
+/// integer are ignored.
+///
+/// # Errors
+///
+/// Returns an error if `offset` is out of bounds, the buffer is too short to
+/// contain the encoded integer, or the encoding is non-canonical.
+///
+/// # Examples
+///
+/// ```
+/// use masque::quic_varint::decode_at;
+///
+/// let buf = &[0x00, 0x40, 0x40, 0xff];
+/// let (value, consumed) = decode_at(buf, 1).unwrap();
+/// assert_eq!(value, 64);
+/// assert_eq!(consumed, 2);
+/// ```
+pub fn decode_at(buf: &[u8], offset: usize) -> Result<(u64, usize)> {
+    if offset > buf.len() {
+        return Err(Error::InvalidVarInt {
+            kind: VarIntErrorKind::BufferTooShort,
+            message: "offset out of bounds".into(),
+        });
+    }
+    decode_inner(&buf[offset..])
+}
+
+fn decode_inner(buf: &[u8]) -> Result<(u64, usize)> {
     if buf.is_empty() {
         return Err(Error::InvalidVarInt {
+            kind: VarIntErrorKind::EmptyBuffer,
             message: "empty buffer".into(),
         });
     }
@@ -71,6 +172,7 @@ pub fn decode(buf: &[u8]) -> Result<(u64, usize)> {
 
     if buf.len() < len {
         return Err(Error::InvalidVarInt {
+            kind: VarIntErrorKind::BufferTooShort,
             message: "buffer too short".into(),
         });
     }
@@ -89,6 +191,7 @@ pub fn decode(buf: &[u8]) -> Result<(u64, usize)> {
     };
     if value < min_value_for_len {
         return Err(Error::InvalidVarInt {
+            kind: VarIntErrorKind::NonCanonical,
             message: "non-canonical encoding".into(),
         });
     }
@@ -137,6 +240,62 @@ mod tests {
     }
 
     #[test]
+    fn try_encode_rejects_oversized_values() {
+        let err = try_encode(MAX_VARINT + 1).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidVarInt {
+                kind: VarIntErrorKind::ValueTooLarge,
+                ..
+            }
+        ));
+        assert!(err.to_string().contains("exceeds 2^62 - 1"));
+    }
+
+    #[test]
+    fn try_encode_matches_encode_for_valid_values() {
+        let values = [
+            0u64,
+            63,
+            64,
+            16_383,
+            16_384,
+            1_073_741_823,
+            1_073_741_824,
+            MAX_VARINT,
+        ];
+        for value in values {
+            assert_eq!(try_encode(value).unwrap(), encode(value));
+        }
+    }
+
+    #[test]
+    fn encode_into_writes_expected_bytes() {
+        let mut buf = [0u8; 8];
+        assert_eq!(encode_into(0, &mut buf).unwrap(), 1);
+        assert_eq!(&buf[..1], &[0x00]);
+
+        assert_eq!(encode_into(64, &mut buf).unwrap(), 2);
+        assert_eq!(&buf[..2], &[0x40, 0x40]);
+
+        assert_eq!(encode_into(MAX_VARINT, &mut buf).unwrap(), 8);
+        assert_eq!(&buf[..8], &[0xff; 8]);
+    }
+
+    #[test]
+    fn encode_into_rejects_short_buffer() {
+        let mut buf = [0u8; 1];
+        let err = encode_into(MAX_VARINT, &mut buf).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidVarInt {
+                kind: VarIntErrorKind::BufferTooShort,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn decode_round_trips_boundary_values() {
         let values = [
             0u64,
@@ -159,42 +318,91 @@ mod tests {
     #[test]
     fn decode_rejects_empty_buffer() {
         let err = decode(&[]).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidVarInt {
+                kind: VarIntErrorKind::EmptyBuffer,
+                ..
+            }
+        ));
         assert_eq!(err.to_string(), "invalid varint: empty buffer");
     }
 
     #[test]
     fn decode_rejects_short_buffer_for_two_byte_form() {
         let err = decode(&[0x40]).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidVarInt {
+                kind: VarIntErrorKind::BufferTooShort,
+                ..
+            }
+        ));
         assert_eq!(err.to_string(), "invalid varint: buffer too short");
     }
 
     #[test]
     fn decode_rejects_short_buffer_for_four_byte_form() {
         let err = decode(&[0x80, 0x00, 0x00]).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidVarInt {
+                kind: VarIntErrorKind::BufferTooShort,
+                ..
+            }
+        ));
         assert_eq!(err.to_string(), "invalid varint: buffer too short");
     }
 
     #[test]
     fn decode_rejects_short_buffer_for_eight_byte_form() {
         let err = decode(&[0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidVarInt {
+                kind: VarIntErrorKind::BufferTooShort,
+                ..
+            }
+        ));
         assert_eq!(err.to_string(), "invalid varint: buffer too short");
     }
 
     #[test]
     fn decode_rejects_non_canonical_two_byte_form() {
         let err = decode(&[0x40, 0x05]).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidVarInt {
+                kind: VarIntErrorKind::NonCanonical,
+                ..
+            }
+        ));
         assert_eq!(err.to_string(), "invalid varint: non-canonical encoding");
     }
 
     #[test]
     fn decode_rejects_non_canonical_four_byte_form() {
         let err = decode(&[0x80, 0x00, 0x00, 0x05]).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidVarInt {
+                kind: VarIntErrorKind::NonCanonical,
+                ..
+            }
+        ));
         assert_eq!(err.to_string(), "invalid varint: non-canonical encoding");
     }
 
     #[test]
     fn decode_rejects_non_canonical_eight_byte_form() {
         let err = decode(&[0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05]).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidVarInt {
+                kind: VarIntErrorKind::NonCanonical,
+                ..
+            }
+        ));
         assert_eq!(err.to_string(), "invalid varint: non-canonical encoding");
     }
 
@@ -203,6 +411,26 @@ mod tests {
         let (value, consumed) = decode(&[0x40, 0x40, 0xff, 0xff]).unwrap();
         assert_eq!(value, 64);
         assert_eq!(consumed, 2);
+    }
+
+    #[test]
+    fn decode_at_reads_from_offset() {
+        let buf = &[0x00, 0x40, 0x40, 0xff];
+        let (value, consumed) = decode_at(buf, 1).unwrap();
+        assert_eq!(value, 64);
+        assert_eq!(consumed, 2);
+    }
+
+    #[test]
+    fn decode_at_rejects_out_of_bounds_offset() {
+        let err = decode_at(&[0x40, 0x40], 3).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidVarInt {
+                kind: VarIntErrorKind::BufferTooShort,
+                ..
+            }
+        ));
     }
 
     #[test]

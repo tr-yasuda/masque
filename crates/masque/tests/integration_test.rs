@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use masque::quic_varint::{self, MAX_VARINT};
-use masque::{Config, Error, Protocol, Session};
+use masque::{Config, Error, Protocol, Session, VarIntErrorKind};
 
 #[test]
 fn config_parses_and_exposes_socket_addresses() {
@@ -83,6 +83,7 @@ fn error_can_be_cloned() {
 #[test]
 fn invalid_var_int_error_can_be_created() {
     let err = Error::InvalidVarInt {
+        kind: VarIntErrorKind::BufferTooShort,
         message: "buffer too short".into(),
     };
     assert!(err.to_string().contains("buffer too short"));
@@ -111,13 +112,59 @@ fn quic_varint_round_trips_boundary_values() {
 #[test]
 fn quic_varint_decode_rejects_invalid_input() {
     let err = quic_varint::decode(&[]).unwrap_err();
-    assert!(matches!(err, Error::InvalidVarInt { .. }));
+    assert!(matches!(
+        err,
+        Error::InvalidVarInt {
+            kind: VarIntErrorKind::EmptyBuffer,
+            ..
+        }
+    ));
 
     let err = quic_varint::decode(&[0x40]).unwrap_err();
-    assert!(err.to_string().contains("buffer too short"));
+    assert!(matches!(
+        err,
+        Error::InvalidVarInt {
+            kind: VarIntErrorKind::BufferTooShort,
+            ..
+        }
+    ));
 
     let err = quic_varint::decode(&[0x40, 0x05]).unwrap_err();
-    assert!(err.to_string().contains("non-canonical encoding"));
+    assert!(matches!(
+        err,
+        Error::InvalidVarInt {
+            kind: VarIntErrorKind::NonCanonical,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn quic_varint_try_encode_rejects_oversized_values() {
+    let err = quic_varint::try_encode(MAX_VARINT + 1).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::InvalidVarInt {
+            kind: VarIntErrorKind::ValueTooLarge,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn quic_varint_encode_into_writes_to_caller_buffer() {
+    let mut buf = [0u8; 8];
+    let n = quic_varint::encode_into(64, &mut buf).unwrap();
+    assert_eq!(n, 2);
+    assert_eq!(&buf[..n], &[0x40, 0x40]);
+}
+
+#[test]
+fn quic_varint_decode_at_reads_from_offset() {
+    let buf = &[0x00, 0x40, 0x40, 0xff];
+    let (value, consumed) = quic_varint::decode_at(buf, 1).unwrap();
+    assert_eq!(value, 64);
+    assert_eq!(consumed, 2);
 }
 
 #[test]
