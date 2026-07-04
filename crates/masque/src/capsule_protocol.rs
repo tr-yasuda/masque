@@ -15,9 +15,9 @@ pub const CAPSULE_PROTOCOL: &str = "capsule-protocol";
 /// Parse a `Capsule-Protocol` header value as a Boolean Structured Field.
 ///
 /// Returns `Some(true)` for `?1` and `Some(false)` for `?0`. Optional
-/// surrounding whitespace (SP / HTAB) and unknown parameters are handled as
-/// required by RFC 8941 and RFC 9297. Returns `None` for empty or malformed
-/// input, or for non-boolean values.
+/// surrounding SP characters and unknown parameters are handled as required
+/// by RFC 8941 and RFC 9297. Returns `None` for empty or malformed input, or
+/// for non-boolean values.
 ///
 /// Per RFC 9297 Section 3.4, a `false` value has the same semantics as the
 /// header being absent. Callers that want to detect Capsule Protocol support
@@ -212,23 +212,28 @@ fn parse_binary(input: &[u8]) -> Option<(&[u8], &[u8])> {
 }
 
 fn is_valid_base64(input: &[u8]) -> bool {
-    if input.len() % 4 != 0 {
-        return false;
+    if input.is_empty() {
+        return true;
     }
 
     let mut padding = 0;
-    for (i, &c) in input.iter().enumerate() {
+    for &c in input.iter().rev() {
         if c == b'=' {
-            if i + 2 < input.len() {
+            padding += 1;
+            if padding > 2 {
                 return false;
             }
-            padding += 1;
-        } else if padding > 0 || !is_base64_char(c) {
-            return false;
+        } else {
+            break;
         }
     }
 
-    padding <= 2
+    let content_len = input.len() - padding;
+    if content_len == 0 {
+        return false;
+    }
+
+    input[..content_len].iter().all(|&c| is_base64_char(c))
 }
 
 fn is_base64_char(c: u8) -> bool {
@@ -373,7 +378,11 @@ mod tests {
         assert_eq!(parse_capsule_protocol("?1;foo=\"unterminated"), None);
         assert_eq!(parse_capsule_protocol("?1;foo =bar"), None);
         assert_eq!(parse_capsule_protocol("?1;foo=?"), None);
-        assert_eq!(parse_capsule_protocol("?1;foo=:="), None);
+    }
+
+    #[test]
+    fn parse_unpadded_binary_parameter_returns_boolean() {
+        assert_eq!(parse_capsule_protocol("?1;foo=:Zg:"), Some(true));
     }
 
     #[test]
