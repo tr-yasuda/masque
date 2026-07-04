@@ -76,6 +76,13 @@ pub enum Error {
         /// This message must be generated internally and must not contain raw
         /// peer-supplied data, because it may be logged or returned to callers.
         message: String,
+        /// The underlying error that caused this datagram parse error, if any.
+        ///
+        /// This allows callers and operators to inspect the root cause (for
+        /// example, a variable-length integer decode failure) without parsing
+        /// the human-readable message string. The source is optional because
+        /// some datagram errors have no lower-level origin.
+        source: Option<Box<Error>>,
     },
 }
 
@@ -141,10 +148,21 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Error::H3DatagramError { source, .. } => source
+                .as_deref()
+                .map(|e| e as &(dyn std::error::Error + 'static)),
+            _ => None,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as StdError;
+
     use super::*;
 
     #[test]
@@ -172,6 +190,7 @@ mod tests {
         let err = Error::H3DatagramError {
             kind: H3DatagramErrorKind::Generic,
             message: "invalid datagram length".into(),
+            source: None,
         };
         assert_eq!(
             err.to_string(),
@@ -180,10 +199,25 @@ mod tests {
     }
 
     #[test]
+    fn h3_datagram_error_preserves_source_error() {
+        let inner = Error::InvalidVarInt {
+            kind: VarIntErrorKind::BufferTooShort,
+            message: "buffer too short".into(),
+        };
+        let err = Error::H3DatagramError {
+            kind: H3DatagramErrorKind::InvalidVarint,
+            message: "invalid quarter stream ID".into(),
+            source: Some(Box::new(inner.clone())),
+        };
+        assert_eq!(err.source().map(|e| e.to_string()), Some(inner.to_string()));
+    }
+
+    #[test]
     fn h3_datagram_error_is_cloneable() {
         let err = Error::H3DatagramError {
             kind: H3DatagramErrorKind::Generic,
             message: "parse failed".into(),
+            source: None,
         };
         let cloned = err.clone();
         assert_eq!(err, cloned);
@@ -194,14 +228,17 @@ mod tests {
         let err = Error::H3DatagramError {
             kind: H3DatagramErrorKind::Generic,
             message: "parse failed".into(),
+            source: None,
         };
         let same = Error::H3DatagramError {
             kind: H3DatagramErrorKind::Generic,
             message: "parse failed".into(),
+            source: None,
         };
         let different = Error::H3DatagramError {
             kind: H3DatagramErrorKind::Generic,
             message: "other".into(),
+            source: None,
         };
         assert_eq!(err, same);
         assert_ne!(err, different);
@@ -229,6 +266,7 @@ mod tests {
             Error::H3DatagramError {
                 kind: H3DatagramErrorKind::Generic,
                 message: "parse failed".into(),
+                source: None,
             },
         ];
         for err in errors {

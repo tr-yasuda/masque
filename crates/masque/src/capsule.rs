@@ -30,6 +30,7 @@ impl CapsuleType {
             return Err(Error::H3DatagramError {
                 kind: H3DatagramErrorKind::VarintOutOfRange,
                 message: format!("capsule type {value} exceeds maximum varint value"),
+                source: None,
             });
         }
         Ok(Self(value))
@@ -145,6 +146,7 @@ impl Capsule {
         let length = usize::try_from(length).map_err(|_| Error::H3DatagramError {
             kind: H3DatagramErrorKind::LengthTooLarge,
             message: "capsule length exceeds platform usize".into(),
+            source: None,
         })?;
 
         let end = offset
@@ -152,12 +154,14 @@ impl Capsule {
             .ok_or_else(|| Error::H3DatagramError {
                 kind: H3DatagramErrorKind::LengthOverflow,
                 message: "capsule length overflow".into(),
+                source: None,
             })?;
 
         if buf.len() < end {
             return Err(Error::H3DatagramError {
                 kind: H3DatagramErrorKind::Truncated,
                 message: "capsule value truncated".into(),
+                source: None,
             });
         }
 
@@ -176,20 +180,23 @@ fn validate_length(len: usize) -> Result<()> {
     let len_u64 = u64::try_from(len).map_err(|_| Error::H3DatagramError {
         kind: H3DatagramErrorKind::LengthTooLarge,
         message: "capsule value length exceeds u64".into(),
+        source: None,
     })?;
     if len_u64 > MAX_VARINT {
         return Err(Error::H3DatagramError {
             kind: H3DatagramErrorKind::VarintOutOfRange,
             message: "capsule value length exceeds maximum varint".into(),
+            source: None,
         });
     }
     Ok(())
 }
 
-fn map_varint_err(_err: Error) -> Error {
+fn map_varint_err(err: Error) -> Error {
     Error::H3DatagramError {
         kind: H3DatagramErrorKind::InvalidVarint,
         message: "malformed capsule varint".into(),
+        source: Some(Box::new(err)),
     }
 }
 

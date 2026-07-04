@@ -1,9 +1,18 @@
 //! HTTP Datagram payload types per RFC 9297.
 
+use crate::quic_varint;
 use crate::{Error, H3DatagramErrorKind, Result};
 
 /// The largest stream ID allowed by QUIC (RFC 9000 Section 2.1).
 const MAX_QUIC_STREAM_ID: u64 = (1 << 62) - 1;
+
+/// The largest Quarter Stream ID allowed in an HTTP/3 Datagram (RFC 9297
+/// Section 2.1).
+///
+/// Because HTTP/3 Datagrams are associated with client-initiated bidirectional
+/// streams, the full stream ID is always a multiple of four. The Quarter Stream
+/// ID is therefore `stream_id / 4` and must not exceed `2^60 - 1`.
+pub const MAX_QUARTER_STREAM_ID: u64 = (1 << 60) - 1;
 
 /// A payload carried by an HTTP Datagram.
 ///
@@ -74,17 +83,74 @@ impl HttpDatagram {
         (self.stream_id, self.payload)
     }
 
+    /// Encode this datagram into the HTTP/3 Datagram frame format.
+    ///
+    /// RFC 9297 Section 2.1 defines the payload of an HTTP/3 Datagram as a
+    /// QUIC DATAGRAM frame whose contents are `Quarter Stream ID (i)` followed
+    /// by the `HTTP Datagram Payload (..)`. The Quarter Stream ID is the
+    /// request stream ID divided by four.
+    ///
+    /// This function is infallible for any [`HttpDatagram`] constructed through
+    /// [`HttpDatagram::new`], because that constructor already validates that
+    /// the stream ID is within the range that encodes safely as a QUIC varint.
+    #[must_use]
+    pub fn encode_h3(&self) -> Vec<u8> {
+        let quarter_stream_id = self.stream_id / 4;
+        let varint = quic_varint::encode(quarter_stream_id);
+        let mut buf = Vec::with_capacity(varint.len() + self.payload.len());
+        buf.extend_from_slice(&varint);
+        buf.extend_from_slice(&self.payload);
+        buf
+    }
+
+    /// Decode an HTTP/3 Datagram frame (RFC 9297 Section 2.1) from `buf`.
+    ///
+    /// The buffer must contain exactly one HTTP/3 Datagram: a Quarter Stream ID
+    /// encoded as a QUIC variable-length integer followed by the opaque payload
+    /// bytes. Because the format does not include a length prefix, any trailing
+    /// bytes in `buf` are treated as part of the payload; callers must slice
+    /// `buf` to the exact QUIC DATAGRAM frame payload before calling this
+    /// function.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::Error::H3DatagramError`] if the Quarter Stream ID is
+    /// missing, malformed, or exceeds [`MAX_QUARTER_STREAM_ID`].
+    pub fn decode_h3(buf: &[u8]) -> Result<Self> {
+        let (quarter_stream_id, consumed) =
+            quic_varint::decode(buf).map_err(|e| Error::H3DatagramError {
+                kind: H3DatagramErrorKind::InvalidVarint,
+                message: "invalid quarter stream ID".into(),
+                source: Some(Box::new(e)),
+            })?;
+        if quarter_stream_id > MAX_QUARTER_STREAM_ID {
+            return Err(Error::H3DatagramError {
+                kind: H3DatagramErrorKind::VarintOutOfRange,
+                message: "quarter stream ID exceeds 2^60 - 1".into(),
+                source: None,
+            });
+        }
+        let stream_id = quarter_stream_id * 4;
+        // The preceding guard guarantees that `stream_id` is a valid
+        // client-initiated bidirectional stream ID, so we can construct the
+        // datagram directly instead of re-running `validate_stream_id`.
+        let payload = buf[consumed..].to_vec();
+        Ok(Self { stream_id, payload })
+    }
+
     fn validate_stream_id(stream_id: u64) -> Result<()> {
         if stream_id > MAX_QUIC_STREAM_ID {
             return Err(Error::H3DatagramError {
                 kind: H3DatagramErrorKind::Generic,
                 message: "stream ID exceeds the maximum QUIC stream ID".into(),
+                source: None,
             });
         }
         if stream_id % 4 != 0 {
             return Err(Error::H3DatagramError {
                 kind: H3DatagramErrorKind::Generic,
                 message: "stream ID is not a client-initiated bidirectional stream ID".into(),
+                source: None,
             });
         }
         Ok(())
@@ -130,6 +196,8 @@ pub trait DatagramPayload: Sized {
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as StdError;
+
     use super::*;
 
     #[test]
@@ -234,6 +302,7 @@ mod tests {
             Err(Error::H3DatagramError {
                 kind: H3DatagramErrorKind::Generic,
                 message: "malformed payload".into(),
+                source: None,
             })
         }
     }
@@ -246,5 +315,128 @@ mod tests {
             err.to_string(),
             "HTTP/3 datagram or capsule protocol error (0x33): malformed payload"
         );
+    }
+
+    #[test]
+    fn encode_h3_includes_quarter_stream_id_and_payload() {
+        let datagram = HttpDatagram::new(0, b"hello").unwrap();
+        let encoded = datagram.encode_h3();
+        assert_eq!(encoded, vec![0x00, b'h', b'e', b'l', b'l', b'o']);
+    }
+
+    #[test]
+    fn encode_h3_uses_two_byte_varint_for_medium_stream_ids() {
+        // stream_id = 256 => quarter_stream_id = 64, which needs the 2-byte
+        // varint form (0x40 0x40).
+        let datagram = HttpDatagram::new(256, b"x").unwrap();
+        let encoded = datagram.encode_h3();
+        assert_eq!(encoded, vec![0x40, 0x40, b'x']);
+    }
+
+    #[test]
+    fn encode_h3_uses_four_byte_varint_for_large_stream_ids() {
+        // stream_id = 65_536 => quarter_stream_id = 16_384, which needs the
+        // 4-byte varint form.
+        let datagram = HttpDatagram::new(65_536, b"x").unwrap();
+        let encoded = datagram.encode_h3();
+        assert_eq!(encoded, vec![0x80, 0x00, 0x40, 0x00, b'x']);
+    }
+
+    #[test]
+    fn encode_h3_uses_eight_byte_varint_for_max_stream_id() {
+        let datagram = HttpDatagram::new(MAX_QUARTER_STREAM_ID * 4, b"x").unwrap();
+        let encoded = datagram.encode_h3();
+        // MAX_QUARTER_STREAM_ID = 2^60 - 1 encodes as 0xcf 0xff ... 0xff.
+        assert_eq!(
+            &encoded[..8],
+            &[0xcf, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+        );
+        assert_eq!(&encoded[8..], b"x");
+    }
+
+    #[test]
+    fn encode_h3_preserves_empty_payload() {
+        let datagram = HttpDatagram::new(4, Vec::new()).unwrap();
+        let encoded = datagram.encode_h3();
+        assert_eq!(encoded, vec![0x01]);
+    }
+
+    #[test]
+    fn decode_h3_round_trips_encoded_datagram() {
+        let datagram = HttpDatagram::new(12, vec![1, 2, 3]).unwrap();
+        let encoded = datagram.encode_h3();
+        let decoded = HttpDatagram::decode_h3(&encoded).unwrap();
+        assert_eq!(decoded.stream_id(), 12);
+        assert_eq!(decoded.payload(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn decode_h3_accepts_empty_payload() {
+        let encoded = vec![0x05];
+        let decoded = HttpDatagram::decode_h3(&encoded).unwrap();
+        assert_eq!(decoded.stream_id(), 20);
+        assert!(decoded.payload().is_empty());
+    }
+
+    #[test]
+    fn decode_h3_rejects_truncated_two_byte_quarter_stream_id() {
+        let err = HttpDatagram::decode_h3(&[0x40]).unwrap_err();
+        assert!(matches!(err, Error::H3DatagramError { .. }));
+        assert!(err.to_string().contains("invalid quarter stream ID"));
+        assert!(matches!(
+            err.source(),
+            Some(e) if e.to_string().contains("invalid varint")
+        ));
+    }
+
+    #[test]
+    fn decode_h3_rejects_truncated_four_byte_quarter_stream_id() {
+        let err = HttpDatagram::decode_h3(&[0x80, 0x00, 0x00]).unwrap_err();
+        assert!(matches!(err, Error::H3DatagramError { .. }));
+    }
+
+    #[test]
+    fn decode_h3_rejects_truncated_eight_byte_quarter_stream_id() {
+        let err = HttpDatagram::decode_h3(&[0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]).unwrap_err();
+        assert!(matches!(err, Error::H3DatagramError { .. }));
+    }
+
+    #[test]
+    fn decode_h3_rejects_empty_buffer() {
+        let err = HttpDatagram::decode_h3(&[]).unwrap_err();
+        assert!(matches!(err, Error::H3DatagramError { .. }));
+        assert!(err.to_string().contains("invalid quarter stream ID"));
+    }
+
+    #[test]
+    fn decode_h3_rejects_quarter_stream_id_at_max_plus_one() {
+        // MAX_QUARTER_STREAM_ID + 1 = 2^60, which encodes as an 8-byte varint.
+        // 2^60 = 0x1000000000000000, encoded as 0xd0 0x00 ... 0x00.
+        let buf = [0xd0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, b'x'];
+        let err = HttpDatagram::decode_h3(&buf).unwrap_err();
+        assert!(matches!(err, Error::H3DatagramError { .. }));
+        assert!(err.to_string().contains("exceeds 2^60 - 1"));
+    }
+
+    #[test]
+    fn decode_h3_accepts_max_quarter_stream_id() {
+        // MAX_QUARTER_STREAM_ID = 2^60 - 1, encoded as 0xcf 0xff ... 0xff.
+        let mut buf = vec![0xcf, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+        buf.extend_from_slice(b"payload");
+        let decoded = HttpDatagram::decode_h3(&buf).unwrap();
+        assert_eq!(decoded.stream_id(), MAX_QUARTER_STREAM_ID * 4);
+        assert_eq!(decoded.payload(), b"payload");
+    }
+
+    #[test]
+    fn decode_h3_treats_trailing_bytes_as_payload() {
+        // The HTTP/3 Datagram format has no length prefix, so the caller is
+        // responsible for passing a buffer that ends at the frame boundary.
+        let encoded = vec![
+            0x00, b'h', b'e', b'l', b'l', b'o', b't', b'r', b'a', b'i', b'l',
+        ];
+        let decoded = HttpDatagram::decode_h3(&encoded).unwrap();
+        assert_eq!(decoded.stream_id(), 0);
+        assert_eq!(decoded.payload(), b"hellotrail");
     }
 }
