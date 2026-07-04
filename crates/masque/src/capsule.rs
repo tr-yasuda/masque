@@ -224,9 +224,11 @@ pub const DEFAULT_MAX_CAPSULE_LENGTH: usize = 65_536;
 /// `Ok(None)`.
 ///
 /// Capsules with unknown types are silently skipped as required by RFC 9297
-/// Section 3.2. Their value bytes are discarded without being copied into a
-/// [`Capsule`], so a peer cannot force the parser to allocate memory for
-/// skipped capsules.
+/// Section 3.2. Their value bytes are not copied into a [`Capsule`]; once the
+/// capsule header has been parsed, received value bytes are discarded from the
+/// internal buffer as they arrive. This bounds the memory used for a skipped
+/// capsule to the header size plus at most one feed chunk, rather than the
+/// declared capsule length.
 ///
 /// Note that the parser still buffers one complete capsule value before
 /// yielding it, because [`Capsule`] stores the value as a [`Vec<u8>`]. The
@@ -243,6 +245,8 @@ pub struct CapsuleParser {
     /// Number of consumed prefix bytes in `buf`.
     start: usize,
     max_capsule_length: usize,
+    /// Remaining bytes of an unknown capsule value to discard.
+    skip_remaining: usize,
 }
 
 impl Default for CapsuleParser {
@@ -266,6 +270,7 @@ impl CapsuleParser {
             buf: Vec::new(),
             start: 0,
             max_capsule_length,
+            skip_remaining: 0,
         }
     }
 
@@ -306,7 +311,7 @@ impl CapsuleParser {
     /// kind [`H3DatagramErrorKind::Truncated`], mirroring the behavior of
     /// [`Capsule::decode`] for a truncated final capsule.
     pub fn finalize(self) -> Result<()> {
-        if self.start >= self.buf.len() {
+        if self.start >= self.buf.len() && self.skip_remaining == 0 {
             Ok(())
         } else {
             Err(Error::h3_datagram_error(
@@ -318,6 +323,17 @@ impl CapsuleParser {
 
     fn try_parse(&mut self) -> Result<Option<Capsule>> {
         loop {
+            if self.skip_remaining > 0 {
+                let available = self.buf.len().saturating_sub(self.start);
+                let discard = available.min(self.skip_remaining);
+                self.start += discard;
+                self.skip_remaining -= discard;
+                self.maybe_compact();
+                if self.skip_remaining > 0 {
+                    return Ok(None);
+                }
+            }
+
             let window = match self.buf.get(self.start..) {
                 Some(w) if !w.is_empty() => w,
                 _ => {
@@ -354,15 +370,22 @@ impl CapsuleParser {
                 )
             })?;
 
-            if window.len() < end {
-                return Ok(None);
-            }
-
-            let consumed = end;
             if capsule_type.is_unknown() {
-                self.start += consumed;
+                if window.len() >= end {
+                    // The whole unknown capsule is already buffered; skip it now.
+                    self.start += end;
+                    self.maybe_compact();
+                    continue;
+                }
+
+                // Only part of the value has arrived. Discard the header and any
+                // value bytes already present, then drain the rest incrementally
+                // as more bytes are fed.
+                let available_value = window.len().saturating_sub(header_len);
+                self.start += header_len + available_value;
+                self.skip_remaining = length.saturating_sub(available_value);
                 self.maybe_compact();
-                continue;
+                return Ok(None);
             }
 
             if length > self.max_capsule_length {
@@ -370,6 +393,10 @@ impl CapsuleParser {
                     H3DatagramErrorKind::LengthTooLarge,
                     "capsule length exceeds maximum allowed",
                 ));
+            }
+
+            if window.len() < end {
+                return Ok(None);
             }
 
             let value_start = self.start + header_len;
@@ -809,9 +836,11 @@ mod tests {
     }
 
     #[test]
-    fn parser_skips_unknown_capsule_without_copying_value() {
+    fn parser_skips_unknown_capsule_exceeding_max_length() {
         // Build an unknown capsule whose declared length exceeds the default max
         // length without using Capsule::new, which rejects such values.
+        // Unknown capsules are skipped regardless of length, without allocating
+        // a Capsule value vector.
         let huge_len = DEFAULT_MAX_CAPSULE_LENGTH + 1;
         let mut encoded = quic_varint::encode(0x01); // unknown type, 1-byte varint
         encoded.extend_from_slice(&quic_varint::encode(huge_len as u64));
@@ -820,5 +849,65 @@ mod tests {
         let mut parser = CapsuleParser::new();
         assert_eq!(parser.feed(&encoded).unwrap(), None);
         assert_eq!(parser.feed(&[]).unwrap(), None);
+        assert!(parser.finalize().is_ok());
+    }
+
+    #[test]
+    fn parser_discards_unknown_capsule_value_incrementally() {
+        // Unknown type 0x01 with a 10-byte value, fed one byte at a time.
+        // The parser must not require the whole value to be buffered before
+        // discarding it.
+        let mut encoded = quic_varint::encode(0x01);
+        encoded.extend_from_slice(&quic_varint::encode(10));
+        encoded.resize(encoded.len() + 10, 0x00);
+
+        let mut parser = CapsuleParser::new();
+        for i in 0..encoded.len() {
+            assert_eq!(
+                parser.feed(&encoded[i..i + 1]).unwrap(),
+                None,
+                "should not yield a capsule at byte {i}"
+            );
+        }
+        assert_eq!(parser.feed(&[]).unwrap(), None);
+        assert!(parser.finalize().is_ok());
+    }
+
+    #[test]
+    fn parser_yields_known_capsule_after_incremental_unknown_skip() {
+        let unknown = Capsule::new(CapsuleType::new(0x01).unwrap(), vec![0u8; 7]).unwrap();
+        let known = Capsule::new(CapsuleType::DATAGRAM, vec![0xab]).unwrap();
+
+        let mut encoded = unknown.encode().unwrap();
+        encoded.extend_from_slice(&known.encode().unwrap());
+
+        let mut parser = CapsuleParser::new();
+        let mut yielded = None;
+        for chunk in encoded.chunks(3) {
+            if let Some(capsule) = parser.feed(chunk).unwrap() {
+                yielded = Some(capsule);
+                break;
+            }
+        }
+        assert_eq!(yielded, Some(known));
+    }
+
+    #[test]
+    fn finalize_rejects_partial_unknown_capsule_value() {
+        let mut parser = CapsuleParser::new();
+        // Unknown type 0x01, length 10, only 3 value bytes.
+        let mut encoded = quic_varint::encode(0x01);
+        encoded.extend_from_slice(&quic_varint::encode(10));
+        encoded.extend_from_slice(&[0x00, 0x00, 0x00]);
+
+        assert_eq!(parser.feed(&encoded).unwrap(), None);
+        let err = parser.finalize().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::Truncated,
+                ..
+            }
+        ));
     }
 }
