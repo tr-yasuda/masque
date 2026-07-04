@@ -660,7 +660,8 @@ mod tests {
                     decoded = Some(c);
                 }
             }
-            let decoded = decoded.expect("should decode a capsule for length {len}");
+            let decoded =
+                decoded.unwrap_or_else(|| panic!("should decode a capsule for length {len}"));
             assert_eq!(decoded.capsule_type(), CapsuleType::DATAGRAM);
             assert_eq!(decoded.value().len(), len);
             assert_eq!(parser.feed(&[]).unwrap(), None);
