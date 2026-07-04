@@ -72,10 +72,26 @@ fn not_implemented_error_can_be_created() {
 }
 
 #[test]
+fn h3_datagram_error_can_be_created() {
+    let err = Error::H3DatagramError {
+        message: "invalid datagram length".into(),
+    };
+    let text = err.to_string();
+    assert!(text.contains("invalid datagram length"));
+    assert!(text.contains("0x33"));
+}
+
+#[test]
 fn error_can_be_cloned() {
     let err = Error::InvalidConfig {
         field: "bind_addr",
         message: "must not be empty".into(),
+    };
+    let cloned = err.clone();
+    assert_eq!(err, cloned);
+
+    let err = Error::H3DatagramError {
+        message: "parse failed".into(),
     };
     let cloned = err.clone();
     assert_eq!(err, cloned);
