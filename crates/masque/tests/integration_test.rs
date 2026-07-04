@@ -552,9 +552,10 @@ fn capsule_parser_handles_partial_input() {
     assert_eq!(parser.feed(&[0x00]).unwrap(), None);
     assert_eq!(parser.feed(&[0x02]).unwrap(), None);
     assert_eq!(parser.feed(&[0x01]).unwrap(), None);
-    let capsule = parser.feed(&[0x02, 0x03]).unwrap().unwrap();
+    let capsule = parser.feed(&[0x02]).unwrap().unwrap();
     assert_eq!(capsule.capsule_type(), CapsuleType::DATAGRAM);
     assert_eq!(capsule.value(), &[0x01, 0x02]);
+    assert_eq!(parser.feed(&[]).unwrap(), None);
 }
 
 #[test]
