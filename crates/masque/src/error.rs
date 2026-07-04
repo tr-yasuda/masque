@@ -5,6 +5,10 @@ use std::fmt;
 /// A specialized [`Result`] type for `masque` operations.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+/// The HTTP/3 error code registered in RFC 9297 Section 5.2 for datagram
+/// or Capsule Protocol parse errors.
+pub const H3_DATAGRAM_ERROR_CODE: u64 = 0x33;
+
 /// Errors that can occur when using `masque`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -30,6 +34,21 @@ pub enum Error {
         /// Description of the missing feature.
         message: String,
     },
+
+    /// An HTTP/3 datagram or Capsule Protocol parse error occurred.
+    ///
+    /// This corresponds to the `H3_DATAGRAM_ERROR` error code defined in
+    /// RFC 9297 Section 5.2, whose numeric value is [`H3_DATAGRAM_ERROR_CODE`].
+    /// Per RFC 9297 Sections 2.1 and 3.3, this is an HTTP/3 connection or stream
+    /// error; callers that produce this error must abort the affected request
+    /// stream or terminate the connection.
+    H3DatagramError {
+        /// A human-readable description of what is wrong.
+        ///
+        /// This message must be generated internally and must not contain raw
+        /// peer-supplied data, because it may be logged or returned to callers.
+        message: String,
+    },
 }
 
 /// The kind of variable-length integer failure.
@@ -52,6 +71,10 @@ impl fmt::Display for Error {
             }
             Error::InvalidVarInt { kind: _, message } => write!(f, "invalid varint: {message}"),
             Error::NotImplemented { message } => write!(f, "not implemented: {message}"),
+            Error::H3DatagramError { message } => write!(
+                f,
+                "HTTP/3 datagram or capsule protocol error ({H3_DATAGRAM_ERROR_CODE:#x}): {message}"
+            ),
         }
     }
 }
@@ -83,13 +106,54 @@ mod tests {
     }
 
     #[test]
+    fn h3_datagram_error_display_includes_message() {
+        let err = Error::H3DatagramError {
+            message: "invalid datagram length".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "HTTP/3 datagram or capsule protocol error (0x33): invalid datagram length"
+        );
+    }
+
+    #[test]
+    fn h3_datagram_error_is_cloneable() {
+        let err = Error::H3DatagramError {
+            message: "parse failed".into(),
+        };
+        let cloned = err.clone();
+        assert_eq!(err, cloned);
+    }
+
+    #[test]
+    fn h3_datagram_error_is_equal() {
+        let err = Error::H3DatagramError {
+            message: "parse failed".into(),
+        };
+        let same = Error::H3DatagramError {
+            message: "parse failed".into(),
+        };
+        let different = Error::H3DatagramError {
+            message: "other".into(),
+        };
+        assert_eq!(err, same);
+        assert_ne!(err, different);
+    }
+
+    #[test]
     fn error_is_cloneable() {
         let err = Error::InvalidConfig {
             field: "peer_addr",
             message: "invalid".into(),
         };
         let cloned = err.clone();
-        assert_eq!(err.to_string(), cloned.to_string());
+        assert_eq!(err, cloned);
+
+        let err = Error::NotImplemented {
+            message: "CONNECT-UDP proxy".into(),
+        };
+        let cloned = err.clone();
+        assert_eq!(err, cloned);
     }
 
     #[test]

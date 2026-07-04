@@ -22,5 +22,5 @@ pub mod quic_varint;
 pub mod types;
 
 pub use config::Config;
-pub use error::{Error, Result, VarIntErrorKind};
+pub use error::{Error, H3_DATAGRAM_ERROR_CODE, Result, VarIntErrorKind};
 pub use types::{Protocol, Session};
