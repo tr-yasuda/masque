@@ -11,8 +11,9 @@ use std::time::Duration;
 
 use masque::quic_varint::{self, MAX_VARINT};
 use masque::{
-    Config, DatagramPayload, Error, H3DatagramSettingValue, HttpDatagram, Protocol,
-    SETTINGS_H3_DATAGRAM, Session, VarIntErrorKind, validate_h3_datagram_setting_value,
+    CAPSULE_PROTOCOL, Config, DatagramPayload, Error, H3DatagramSettingValue, HttpDatagram,
+    Protocol, SETTINGS_H3_DATAGRAM, Session, VarIntErrorKind, parse_capsule_protocol,
+    serialize_capsule_protocol, validate_h3_datagram_setting_value,
 };
 
 #[test]
@@ -404,6 +405,26 @@ fn datagram_payload_trait_round_trips_through_public_api() {
     let encoded = original.encode().unwrap();
     let decoded = TestPayload::decode(&encoded).unwrap();
     assert_eq!(original, decoded);
+}
+
+#[test]
+fn capsule_protocol_header_name_is_accessible_at_crate_root() {
+    assert_eq!(CAPSULE_PROTOCOL, "capsule-protocol");
+}
+
+#[test]
+fn capsule_protocol_parses_and_serializes_at_crate_root() {
+    assert_eq!(parse_capsule_protocol("?1"), Some(true));
+    assert_eq!(parse_capsule_protocol("?0"), Some(false));
+    assert_eq!(parse_capsule_protocol(" ?1;foo=bar "), Some(true));
+    assert_eq!(parse_capsule_protocol("true"), None);
+
+    for value in [true, false] {
+        assert_eq!(
+            parse_capsule_protocol(serialize_capsule_protocol(value)),
+            Some(value)
+        );
+    }
 }
 
 #[test]

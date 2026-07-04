@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Error::H3DatagramError` variant and `H3_DATAGRAM_ERROR_CODE` constant for RFC 9297 `H3_DATAGRAM_ERROR` (0x33).
 - Initial Cargo workspace with Rust 2024 edition and resolver 3.
 - `crates/masque` library crate with core types, errors, and configuration.
+- `capsule_protocol` module with the `Capsule-Protocol` header constant, parser, and serializer.
 - UDP echo client/server examples.
 - CONNECT-UDP proxy example stub with TODOs.
 - Integration test scaffold.

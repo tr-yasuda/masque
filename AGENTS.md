@@ -15,9 +15,10 @@ proxies. The first protocol target is CONNECT-UDP (RFC 9298) over HTTP/3
 (RFC 9000) rather than writing one from scratch.
 
 The project is intentionally in a scaffold / proof-of-concept phase. The core
-library currently exposes only configuration primitives, error types, and
-placeholder types for protocols and sessions. Examples are plain UDP echo
-programs and a CONNECT-UDP proxy stub.
+library currently exposes configuration primitives, error types, placeholder
+types for protocols and sessions, HTTP/3 settings helpers, and a
+`Capsule-Protocol` header helper.
+Examples are plain UDP echo programs and a CONNECT-UDP proxy stub.
 
 Key facts:
 
@@ -38,11 +39,12 @@ masque/
 │   └── masque/             # The main library crate
 │       ├── Cargo.toml
 │       ├── src/
-│       │   ├── lib.rs      # Crate root; re-exports public API
-│       │   ├── config.rs   # Config validation and parsing
-│       │   ├── error.rs    # Error enum and Result type
-│       │   ├── settings.rs # HTTP/3 settings constants and validation
-│       │   └── types.rs    # Protocol / Session types
+│       │   ├── lib.rs              # Crate root; re-exports public API
+│       │   ├── capsule_protocol.rs # Capsule-Protocol header helper
+│       │   ├── config.rs           # Config validation and parsing
+│       │   ├── error.rs            # Error enum and Result type
+│       │   ├── settings.rs         # HTTP/3 settings constants and validation
+│       │   └── types.rs            # Protocol / Session types
 │       ├── tests/
 │       │   └── integration_test.rs
 │       └── examples/
@@ -66,6 +68,8 @@ masque/
 The main library. It currently has no external dependencies and is marked
 `publish = false`. Public modules:
 
+- `capsule_protocol` — `Capsule-Protocol` header constant, parser, and
+  serializer.
 - `config` — `Config` with validated `SocketAddr` bind/peer addresses.
 - `error` — `Error` enum (`InvalidConfig`, `NotImplemented`, `H3DatagramSetting`,
   `H3SettingsConflict`, `H3DatagramError`) and `Result` alias.
