@@ -41,7 +41,8 @@ masque/
 │       │   ├── lib.rs      # Crate root; re-exports public API
 │       │   ├── config.rs   # Config validation and parsing
 │       │   ├── error.rs    # Error enum and Result type
-│       │   └── types.rs    # Protocol / Session placeholders
+│       │   ├── settings.rs # HTTP/3 settings constants and validation
+│       │   └── types.rs    # Protocol / Session types
 │       ├── tests/
 │       │   └── integration_test.rs
 │       └── examples/
@@ -66,9 +67,12 @@ The main library. It currently has no external dependencies and is marked
 `publish = false`. Public modules:
 
 - `config` — `Config` with validated `SocketAddr` bind/peer addresses.
-- `error` — `Error` enum (`InvalidConfig`, `NotImplemented`) and `Result` alias.
+- `error` — `Error` enum (`InvalidConfig`, `NotImplemented`, `H3DatagramSetting`,
+  `H3SettingsConflict`, `H3DatagramError`) and `Result` alias.
+- `settings` — HTTP/3 setting constants such as `SETTINGS_H3_DATAGRAM`, the
+  `H3DatagramSettingValue` newtype, and validation helpers.
 - `types` — `Protocol` enum (`ConnectUdp`, `ConnectIp`, `ConnectEthernet`) and
-  a placeholder `Session` type.
+  `Session`, which tracks negotiated capabilities such as HTTP/3 Datagrams.
 
 The crate root enables `#![warn(missing_docs)]` and `#![warn(rust_2018_idioms)]`,
 so new public items should be documented and idiomatic.

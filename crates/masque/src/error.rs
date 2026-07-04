@@ -7,6 +7,10 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// The HTTP/3 error code registered in RFC 9297 Section 5.2 for datagram
 /// or Capsule Protocol parse errors.
+///
+/// Note that this error code has the same numeric value (`0x33`) as the
+/// `SETTINGS_H3_DATAGRAM` setting identifier, but the two belong to different
+/// namespaces and must not be used interchangeably.
 pub const H3_DATAGRAM_ERROR_CODE: u64 = 0x33;
 
 /// Errors that can occur when using `masque`.
@@ -33,6 +37,28 @@ pub enum Error {
     NotImplemented {
         /// Description of the missing feature.
         message: String,
+    },
+
+    /// A `SETTINGS_H3_DATAGRAM` value was invalid.
+    ///
+    /// RFC 9297 Section 2.1.1 limits this setting to `0` or `1`. Any other
+    /// value is treated as an `H3_SETTINGS_ERROR` condition.
+    H3DatagramSetting {
+        /// The setting identifier that was invalid (`0x33`).
+        setting: u64,
+        /// The invalid value received from the peer.
+        value: u64,
+    },
+
+    /// `SETTINGS_H3_DATAGRAM` was negotiated more than once with conflicting
+    /// values.
+    H3SettingsConflict {
+        /// The setting identifier that was re-negotiated (`0x33`).
+        setting: u64,
+        /// The value that was already negotiated.
+        previous: u64,
+        /// The conflicting value received from the peer.
+        received: u64,
     },
 
     /// An HTTP/3 datagram or Capsule Protocol parse error occurred.
@@ -73,6 +99,18 @@ impl fmt::Display for Error {
             }
             Error::InvalidVarInt { kind, message } => write!(f, "invalid varint ({kind:?}): {message}"),
             Error::NotImplemented { message } => write!(f, "not implemented: {message}"),
+            Error::H3DatagramSetting { setting, value } => write!(
+                f,
+                "invalid HTTP/3 datagram setting {setting:#x}: value must be 0 or 1, got {value}"
+            ),
+            Error::H3SettingsConflict {
+                setting,
+                previous,
+                received,
+            } => write!(
+                f,
+                "HTTP/3 setting {setting:#x} already negotiated with value {previous}; received conflicting value {received}"
+            ),
             Error::H3DatagramError { message } => write!(
                 f,
                 "HTTP/3 datagram or capsule protocol error ({H3_DATAGRAM_ERROR_CODE:#x}): {message}"
@@ -144,18 +182,57 @@ mod tests {
 
     #[test]
     fn error_is_cloneable() {
-        let err = Error::InvalidConfig {
-            field: "peer_addr",
-            message: "invalid".into(),
-        };
-        let cloned = err.clone();
-        assert_eq!(err, cloned);
+        let errors = [
+            Error::InvalidConfig {
+                field: "peer_addr",
+                message: "invalid".into(),
+            },
+            Error::NotImplemented {
+                message: "CONNECT-UDP proxy".into(),
+            },
+            Error::H3DatagramSetting {
+                setting: 0x33,
+                value: 2,
+            },
+            Error::H3SettingsConflict {
+                setting: 0x33,
+                previous: 1,
+                received: 0,
+            },
+            Error::H3DatagramError {
+                message: "parse failed".into(),
+            },
+        ];
+        for err in errors {
+            let cloned = err.clone();
+            assert_eq!(err.to_string(), cloned.to_string());
+            assert_eq!(err, cloned);
+        }
+    }
 
-        let err = Error::NotImplemented {
-            message: "CONNECT-UDP proxy".into(),
+    #[test]
+    fn h3_datagram_setting_display_includes_setting_and_value() {
+        let err = Error::H3DatagramSetting {
+            setting: 0x33,
+            value: 2,
         };
-        let cloned = err.clone();
-        assert_eq!(err, cloned);
+        assert_eq!(
+            err.to_string(),
+            "invalid HTTP/3 datagram setting 0x33: value must be 0 or 1, got 2"
+        );
+    }
+
+    #[test]
+    fn h3_settings_conflict_display_includes_previous_and_received_values() {
+        let err = Error::H3SettingsConflict {
+            setting: 0x33,
+            previous: 1,
+            received: 0,
+        };
+        assert_eq!(
+            err.to_string(),
+            "HTTP/3 setting 0x33 already negotiated with value 1; received conflicting value 0"
+        );
     }
 
     #[test]
