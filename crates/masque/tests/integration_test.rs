@@ -14,8 +14,8 @@ use std::time::Duration;
 use masque::quic_varint::{self, MAX_VARINT};
 use masque::{
     CAPSULE_PROTOCOL, Capsule, CapsuleParser, CapsuleProtocolError, CapsuleType, Config,
-    DatagramPayload, Error, H3DatagramErrorKind, H3DatagramSettingValue, HttpDatagram, Protocol,
-    SETTINGS_H3_DATAGRAM, Session, VarIntErrorKind, parse_capsule_protocol,
+    DatagramCapsule, DatagramPayload, Error, H3DatagramErrorKind, H3DatagramSettingValue,
+    HttpDatagram, Protocol, SETTINGS_H3_DATAGRAM, Session, VarIntErrorKind, parse_capsule_protocol,
     serialize_capsule_protocol, validate_h3_datagram_setting_value,
 };
 
@@ -634,4 +634,28 @@ fn udp_echo_server_example_echoes_datagrams() {
     // the process is terminated even if a panic unwinds past this point.
     let _ = server.0.kill();
     let _ = server.0.wait();
+}
+
+#[test]
+fn datagram_capsule_round_trips_from_public_api() {
+    let datagram = HttpDatagram::new(12, vec![1, 2, 3]).unwrap();
+    let capsule = DatagramCapsule::new(datagram);
+    let encoded = capsule.encode().unwrap();
+    let (decoded, consumed) = DatagramCapsule::decode(&encoded, 12).unwrap();
+    assert_eq!(consumed, encoded.len());
+    assert_eq!(decoded.datagram().stream_id(), 12);
+    assert_eq!(decoded.datagram().payload(), &[1, 2, 3]);
+}
+
+#[test]
+fn datagram_capsule_rejects_truncated_value_from_public_api() {
+    let encoded = [0x00, 0x05, 0x01, 0x02];
+    let err = DatagramCapsule::decode(&encoded, 0).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::H3DatagramError {
+            kind: H3DatagramErrorKind::Truncated,
+            ..
+        }
+    ));
 }

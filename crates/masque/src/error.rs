@@ -120,6 +120,8 @@ pub enum H3DatagramErrorKind {
     LengthOverflow,
     /// The capsule value was truncated.
     Truncated,
+    /// The capsule type was not the expected DATAGRAM type.
+    UnexpectedCapsuleType,
 }
 
 /// A human-readable message for [`Error::H3DatagramError`].

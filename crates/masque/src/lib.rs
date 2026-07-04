@@ -20,6 +20,7 @@ pub mod capsule;
 pub mod capsule_protocol;
 pub mod config;
 pub mod datagram;
+pub mod datagram_capsule;
 pub mod error;
 pub mod quic_varint;
 pub mod settings;
@@ -31,6 +32,7 @@ pub use capsule_protocol::{
 };
 pub use config::Config;
 pub use datagram::{DatagramPayload, HttpDatagram, MAX_QUARTER_STREAM_ID};
+pub use datagram_capsule::DatagramCapsule;
 pub use error::{Error, H3_DATAGRAM_ERROR_CODE, H3DatagramErrorKind, Result, VarIntErrorKind};
 pub use settings::{
     H3DatagramSettingValue, SETTINGS_H3_DATAGRAM, validate_h3_datagram_setting_value,
