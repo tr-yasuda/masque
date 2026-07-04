@@ -21,7 +21,7 @@ The long-term vision is to grow the `masque` crate into a reusable library for M
 
 ## Current scope
 
-- A `masque` core library crate containing types, errors, and configuration primitives.
+- A `masque` core library crate containing types, errors, configuration primitives, and a `Capsule-Protocol` header helper.
 - Plain UDP echo client/server examples for local testing.
 - A `connect_udp_proxy.rs` example stub with TODOs for the MASQUE-specific logic.
 - A minimal `xtask` helper to run fmt, clippy, doc, and tests.
