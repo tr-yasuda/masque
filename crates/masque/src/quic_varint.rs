@@ -53,6 +53,19 @@ pub fn decode(buf: &[u8]) -> Result<(u64, usize)> {
     bytes[8 - len..].copy_from_slice(&buf[..len]);
     let value = u64::from_be_bytes(bytes) & mask;
 
+    let min_value_for_len = match len {
+        1 => 0,
+        2 => 0x40,
+        4 => 0x4000,
+        8 => 0x40000000,
+        _ => unreachable!(),
+    };
+    if value < min_value_for_len {
+        return Err(Error::InvalidVarInt {
+            message: "non-canonical encoding".into(),
+        });
+    }
+
     Ok((value, len))
 }
 
@@ -138,5 +151,50 @@ mod tests {
     fn decode_rejects_short_buffer_for_eight_byte_form() {
         let err = decode(&[0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]).unwrap_err();
         assert_eq!(err.to_string(), "invalid varint: buffer too short");
+    }
+
+    #[test]
+    fn decode_rejects_non_canonical_two_byte_form() {
+        let err = decode(&[0x40, 0x05]).unwrap_err();
+        assert_eq!(err.to_string(), "invalid varint: non-canonical encoding");
+    }
+
+    #[test]
+    fn decode_rejects_non_canonical_four_byte_form() {
+        let err = decode(&[0x80, 0x00, 0x00, 0x05]).unwrap_err();
+        assert_eq!(err.to_string(), "invalid varint: non-canonical encoding");
+    }
+
+    #[test]
+    fn decode_rejects_non_canonical_eight_byte_form() {
+        let err = decode(&[0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05]).unwrap_err();
+        assert_eq!(err.to_string(), "invalid varint: non-canonical encoding");
+    }
+
+    #[test]
+    fn decode_ignores_trailing_bytes() {
+        let (value, consumed) = decode(&[0x40, 0x40, 0xff, 0xff]).unwrap();
+        assert_eq!(value, 64);
+        assert_eq!(consumed, 2);
+    }
+
+    #[test]
+    fn decode_rfc9000_example_vectors() {
+        let cases = [
+            (0u64, &[0x00][..]),
+            (1, &[0x01]),
+            (64, &[0x40, 0x40]),
+            (15_293, &[0x7b, 0xbd]),
+            (494_878_333, &[0x9d, 0x7f, 0x3e, 0x7d]),
+            (
+                151_288_809_941_952_652u64,
+                &[0xc2, 0x19, 0x7c, 0x5e, 0xff, 0x14, 0xe8, 0x8c],
+            ),
+        ];
+        for (expected, buf) in cases {
+            let (value, consumed) = decode(buf).unwrap();
+            assert_eq!(value, expected);
+            assert_eq!(consumed, buf.len());
+        }
     }
 }
