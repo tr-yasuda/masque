@@ -7,6 +7,10 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 /// The HTTP/3 error code registered in RFC 9297 Section 5.2 for datagram
 /// or Capsule Protocol parse errors.
+///
+/// Note that this error code has the same numeric value (`0x33`) as the
+/// `SETTINGS_H3_DATAGRAM` setting identifier, but the two belong to different
+/// namespaces and must not be used interchangeably.
 pub const H3_DATAGRAM_ERROR_CODE: u64 = 0x33;
 
 /// Errors that can occur when using `masque`.
@@ -27,17 +31,21 @@ pub enum Error {
         message: String,
     },
 
-    /// An HTTP/3 settings value was invalid.
-    H3Settings {
-        /// The setting identifier that was invalid.
+    /// A `SETTINGS_H3_DATAGRAM` value was invalid.
+    ///
+    /// RFC 9297 Section 2.1.1 limits this setting to `0` or `1`. Any other
+    /// value is treated as an `H3_SETTINGS_ERROR` condition.
+    H3DatagramSetting {
+        /// The setting identifier that was invalid (`0x33`).
         setting: u64,
         /// The invalid value received from the peer.
         value: u64,
     },
 
-    /// An HTTP/3 setting was negotiated more than once with conflicting values.
+    /// `SETTINGS_H3_DATAGRAM` was negotiated more than once with conflicting
+    /// values.
     H3SettingsConflict {
-        /// The setting identifier that was re-negotiated.
+        /// The setting identifier that was re-negotiated (`0x33`).
         setting: u64,
         /// The value that was already negotiated.
         previous: u64,
@@ -68,9 +76,9 @@ impl fmt::Display for Error {
                 write!(f, "invalid configuration for {field}: {message}")
             }
             Error::NotImplemented { message } => write!(f, "not implemented: {message}"),
-            Error::H3Settings { setting, value } => write!(
+            Error::H3DatagramSetting { setting, value } => write!(
                 f,
-                "invalid HTTP/3 setting {setting:#x}: value must be 0 or 1, got {value}"
+                "invalid HTTP/3 datagram setting {setting:#x}: value must be 0 or 1, got {value}"
             ),
             Error::H3SettingsConflict {
                 setting,
@@ -159,7 +167,7 @@ mod tests {
             Error::NotImplemented {
                 message: "CONNECT-UDP proxy".into(),
             },
-            Error::H3Settings {
+            Error::H3DatagramSetting {
                 setting: 0x33,
                 value: 2,
             },
@@ -180,14 +188,14 @@ mod tests {
     }
 
     #[test]
-    fn h3_settings_display_includes_setting_and_value() {
-        let err = Error::H3Settings {
+    fn h3_datagram_setting_display_includes_setting_and_value() {
+        let err = Error::H3DatagramSetting {
             setting: 0x33,
             value: 2,
         };
         assert_eq!(
             err.to_string(),
-            "invalid HTTP/3 setting 0x33: value must be 0 or 1, got 2"
+            "invalid HTTP/3 datagram setting 0x33: value must be 0 or 1, got 2"
         );
     }
 

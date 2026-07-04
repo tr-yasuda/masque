@@ -2,8 +2,8 @@
 
 use std::fmt;
 
-use crate::Result;
-use crate::settings::SETTINGS_H3_DATAGRAM;
+use crate::settings::{H3DatagramSettingValue, SETTINGS_H3_DATAGRAM};
+use crate::{Error, Result};
 
 /// Identifies a MASQUE target protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -34,14 +34,16 @@ impl fmt::Display for Protocol {
 /// Keeping related HTTP/3 capability state in a dedicated inner type lets
 /// `Session` grow without turning into an unstructured bag of fields and
 /// keeps the public `Session` shape stable.
+///
+/// `Option<H3DatagramSettingValue>` encodes the invariant that each direction's
+/// `SETTINGS_H3_DATAGRAM` value is recorded at most once: `None` means not yet
+/// negotiated, and `Some(value)` means the value has been finalized.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NegotiatedCaps {
-    /// Whether the local endpoint advertised `SETTINGS_H3_DATAGRAM = 1`.
-    local_h3_datagram: bool,
-    /// Whether the peer sent `SETTINGS_H3_DATAGRAM = 1`.
-    peer_h3_datagram: bool,
-    /// Whether a peer `SETTINGS_H3_DATAGRAM` value has already been processed.
-    peer_h3_datagram_negotiated: bool,
+    /// The local endpoint's advertised `SETTINGS_H3_DATAGRAM` value, if any.
+    local_h3_datagram: Option<H3DatagramSettingValue>,
+    /// The peer endpoint's advertised `SETTINGS_H3_DATAGRAM` value, if any.
+    peer_h3_datagram: Option<H3DatagramSettingValue>,
 }
 
 /// A MASQUE session context.
@@ -55,6 +57,13 @@ struct NegotiatedCaps {
 ///
 /// Two sessions compare equal only when both their protocol and their
 /// negotiated capabilities match.
+///
+/// # Concurrency note
+///
+/// This type uses `&mut self` for all state changes. It is designed to be
+/// owned by a single task; callers that need to share it across tasks or
+/// async boundaries should wrap it in their own synchronization primitive
+/// (e.g., `Mutex`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
     protocol: Protocol,
@@ -64,15 +73,14 @@ pub struct Session {
 impl Session {
     /// Create a new session for the given protocol.
     ///
-    /// The session starts with all negotiated capabilities disabled.
+    /// The session starts with all negotiated capabilities unset.
     #[must_use]
     pub const fn new(protocol: Protocol) -> Self {
         Self {
             protocol,
             caps: NegotiatedCaps {
-                local_h3_datagram: false,
-                peer_h3_datagram: false,
-                peer_h3_datagram_negotiated: false,
+                local_h3_datagram: None,
+                peer_h3_datagram: None,
             },
         }
     }
@@ -89,41 +97,60 @@ impl Session {
     /// endpoints have sent `SETTINGS_H3_DATAGRAM` with a value of `1`.
     #[must_use]
     pub const fn is_h3_datagram_enabled(&self) -> bool {
-        self.caps.local_h3_datagram && self.caps.peer_h3_datagram
+        match (self.caps.local_h3_datagram, self.caps.peer_h3_datagram) {
+            (Some(local), Some(peer)) => local.is_enabled() && peer.is_enabled(),
+            _ => false,
+        }
     }
 
-    /// Record whether the local endpoint advertised `SETTINGS_H3_DATAGRAM = 1`.
+    /// Record the local endpoint's advertised `SETTINGS_H3_DATAGRAM` value.
     ///
     /// This should be called after the local HTTP/3 SETTINGS frame has been
-    /// sent. It does not validate the value; the caller is responsible for
-    /// sending only `0` or `1`.
-    pub fn set_local_h3_datagram(&mut self, enabled: bool) {
-        self.caps.local_h3_datagram = enabled;
+    /// sent. Because HTTP/3 SETTINGS are sent once per connection, this method
+    /// ignores subsequent calls with a different value and returns an error if
+    /// a conflicting value is supplied.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::H3SettingsConflict`] if the setting has already been
+    /// recorded with a different value.
+    pub fn set_local_h3_datagram(&mut self, value: H3DatagramSettingValue) -> Result<()> {
+        if let Some(previous) = self.caps.local_h3_datagram {
+            if previous != value {
+                return Err(Error::H3SettingsConflict {
+                    setting: SETTINGS_H3_DATAGRAM,
+                    previous: previous.get(),
+                    received: value.get(),
+                });
+            }
+            return Ok(());
+        }
+        self.caps.local_h3_datagram = Some(value);
+        Ok(())
     }
 
     /// Apply a peer `SETTINGS_H3_DATAGRAM` value received from the remote endpoint.
     ///
-    /// Validates that `value` is `0` or `1`, records the peer advertisement,
-    /// and rejects any later call that would change the already-negotiated
-    /// value, since HTTP/3 SETTINGS are sent only once per connection.
+    /// Records the peer advertisement and rejects any later call that would
+    /// change the already-negotiated value, since HTTP/3 SETTINGS are sent only
+    /// once per connection.
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::H3Settings`] if `value` is not `0` or `1`.
-    /// Returns [`crate::Error::H3SettingsConflict`] if the setting has already
-    /// been negotiated with a different value.
-    pub fn negotiate_peer_h3_datagram(&mut self, value: u64) -> Result<()> {
-        crate::settings::validate_h3_datagram_setting_value(value)?;
-        let enabled = value == 1;
-        if self.caps.peer_h3_datagram_negotiated && self.caps.peer_h3_datagram != enabled {
-            return Err(crate::Error::H3SettingsConflict {
-                setting: SETTINGS_H3_DATAGRAM,
-                previous: if self.caps.peer_h3_datagram { 1 } else { 0 },
-                received: value,
-            });
+    /// Returns [`Error::H3SettingsConflict`] if the setting has already been
+    /// negotiated with a different value.
+    pub fn negotiate_peer_h3_datagram(&mut self, value: H3DatagramSettingValue) -> Result<()> {
+        if let Some(previous) = self.caps.peer_h3_datagram {
+            if previous != value {
+                return Err(Error::H3SettingsConflict {
+                    setting: SETTINGS_H3_DATAGRAM,
+                    previous: previous.get(),
+                    received: value.get(),
+                });
+            }
+            return Ok(());
         }
-        self.caps.peer_h3_datagram = enabled;
-        self.caps.peer_h3_datagram_negotiated = true;
+        self.caps.peer_h3_datagram = Some(value);
         Ok(())
     }
 }
@@ -131,8 +158,6 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Error;
-    use crate::settings::{SETTINGS_H3_DATAGRAM, validate_h3_datagram_setting_value};
 
     #[test]
     fn protocol_display() {
@@ -163,82 +188,116 @@ mod tests {
     fn session_reports_h3_datagram_enabled_only_when_both_sides_agree() {
         let mut session = Session::new(Protocol::ConnectUdp);
 
-        session.set_local_h3_datagram(true);
+        session
+            .set_local_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
         assert!(!session.is_h3_datagram_enabled());
 
-        session.negotiate_peer_h3_datagram(1).unwrap();
+        session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
         assert!(session.is_h3_datagram_enabled());
+    }
 
-        session.set_local_h3_datagram(false);
+    #[test]
+    fn session_reports_disabled_when_either_side_disables() {
+        let mut session = Session::new(Protocol::ConnectUdp);
+        session
+            .set_local_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
+        session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::DISABLED)
+            .unwrap();
+        assert!(!session.is_h3_datagram_enabled());
+
+        let mut session = Session::new(Protocol::ConnectUdp);
+        session
+            .set_local_h3_datagram(H3DatagramSettingValue::DISABLED)
+            .unwrap();
+        session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
         assert!(!session.is_h3_datagram_enabled());
     }
 
     #[test]
     fn session_negotiates_peer_h3_datagram_with_zero() {
         let mut session = Session::new(Protocol::ConnectUdp);
-        assert!(session.negotiate_peer_h3_datagram(0).is_ok());
+        session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::DISABLED)
+            .unwrap();
         assert!(!session.is_h3_datagram_enabled());
     }
 
     #[test]
     fn session_negotiates_peer_h3_datagram_with_one() {
         let mut session = Session::new(Protocol::ConnectUdp);
-        assert!(session.negotiate_peer_h3_datagram(1).is_ok());
+        session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
         assert!(!session.is_h3_datagram_enabled());
 
-        session.set_local_h3_datagram(true);
+        session
+            .set_local_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
         assert!(session.is_h3_datagram_enabled());
     }
 
     #[test]
-    fn session_rejects_invalid_peer_h3_datagram_value() {
+    fn session_allows_idempotent_local_setting() {
         let mut session = Session::new(Protocol::ConnectUdp);
-        let err = session.negotiate_peer_h3_datagram(2).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::H3Settings {
-                setting: SETTINGS_H3_DATAGRAM,
-                value: 2,
-            }
-        ));
-        assert_eq!(
-            err.to_string(),
-            "invalid HTTP/3 setting 0x33: value must be 0 or 1, got 2"
-        );
-        assert!(!session.is_h3_datagram_enabled());
-    }
-
-    #[test]
-    fn session_negotiation_preserves_enabled_state_on_invalid_value() {
-        let mut session = Session::new(Protocol::ConnectUdp);
-        session.set_local_h3_datagram(true);
-        session.negotiate_peer_h3_datagram(1).unwrap();
-        assert!(session.is_h3_datagram_enabled());
-
-        let err = session.negotiate_peer_h3_datagram(2).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::H3Settings {
-                setting: SETTINGS_H3_DATAGRAM,
-                value: 2,
-            }
-        ));
+        session
+            .set_local_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
+        session
+            .set_local_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
+        session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
         assert!(session.is_h3_datagram_enabled());
     }
 
     #[test]
     fn session_allows_idempotent_peer_negotiation() {
         let mut session = Session::new(Protocol::ConnectUdp);
-        session.negotiate_peer_h3_datagram(1).unwrap();
-        assert!(session.negotiate_peer_h3_datagram(1).is_ok());
-        assert!(session.negotiate_peer_h3_datagram(0).is_err());
+        session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::DISABLED)
+            .unwrap();
+        session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::DISABLED)
+            .unwrap();
+        assert!(!session.is_h3_datagram_enabled());
+    }
+
+    #[test]
+    fn session_rejects_conflicting_local_setting() {
+        let mut session = Session::new(Protocol::ConnectUdp);
+        session
+            .set_local_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
+        let err = session
+            .set_local_h3_datagram(H3DatagramSettingValue::DISABLED)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3SettingsConflict {
+                setting: SETTINGS_H3_DATAGRAM,
+                previous: 1,
+                received: 0,
+            }
+        ));
     }
 
     #[test]
     fn session_rejects_conflicting_peer_negotiation() {
         let mut session = Session::new(Protocol::ConnectUdp);
-        session.negotiate_peer_h3_datagram(1).unwrap();
-        let err = session.negotiate_peer_h3_datagram(0).unwrap_err();
+        session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
+        let err = session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::DISABLED)
+            .unwrap_err();
         assert!(matches!(
             err,
             Error::H3SettingsConflict {
@@ -254,23 +313,58 @@ mod tests {
     }
 
     #[test]
+    fn session_negotiation_preserves_enabled_state_on_invalid_value() {
+        let mut session = Session::new(Protocol::ConnectUdp);
+        session
+            .set_local_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
+        session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
+        assert!(session.is_h3_datagram_enabled());
+
+        let err = session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::DISABLED)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3SettingsConflict {
+                setting: SETTINGS_H3_DATAGRAM,
+                previous: 1,
+                received: 0,
+            }
+        ));
+        assert!(session.is_h3_datagram_enabled());
+    }
+
+    #[test]
     fn session_equality_depends_on_protocol_and_caps() {
         let s1 = Session::new(Protocol::ConnectUdp);
         let mut s2 = Session::new(Protocol::ConnectUdp);
         assert_eq!(s1, s2);
 
-        s2.set_local_h3_datagram(true);
+        s2.set_local_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
         assert_ne!(s1, s2);
+
+        let mut s3 = Session::new(Protocol::ConnectUdp);
+        s3.negotiate_peer_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
+        assert_ne!(s2, s3);
     }
 
     #[test]
-    fn validate_is_used_by_negotiate_peer_h3_datagram() {
-        // Ensures the helper is the single source of truth for validation.
+    fn session_accepts_validated_setting_values_only() {
+        // Ensures the public Session API consumes H3DatagramSettingValue rather
+        // than raw u64, so the RFC 9297 0/1 constraint is enforced at the type
+        // level for both local and peer settings.
         let mut session = Session::new(Protocol::ConnectUdp);
-        assert!(
-            session
-                .negotiate_peer_h3_datagram(0)
-                .is_ok_and(|_| validate_h3_datagram_setting_value(0).is_ok())
-        );
+        session
+            .set_local_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
+        session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
+        assert!(session.is_h3_datagram_enabled());
     }
 }

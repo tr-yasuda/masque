@@ -3,6 +3,10 @@
 use crate::{Error, Result};
 
 /// HTTP/3 setting for datagram support (RFC 9297 Section 2.1.1).
+///
+/// Note that this setting identifier has the same numeric value (`0x33`) as the
+/// `H3_DATAGRAM_ERROR` error code (`crate::H3_DATAGRAM_ERROR_CODE`), but the
+/// two belong to different namespaces and must not be used interchangeably.
 pub const SETTINGS_H3_DATAGRAM: u64 = 0x33;
 
 /// A validated value for the `SETTINGS_H3_DATAGRAM` HTTP/3 setting.
@@ -24,12 +28,12 @@ impl H3DatagramSettingValue {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::H3Settings`] if `value` is not `0` or `1`.
+    /// Returns [`Error::H3DatagramSetting`] if `value` is not `0` or `1`.
     pub fn new(value: u64) -> Result<Self> {
         if value == 0 || value == 1 {
             Ok(Self(value))
         } else {
-            Err(Error::H3Settings {
+            Err(Error::H3DatagramSetting {
                 setting: SETTINGS_H3_DATAGRAM,
                 value,
             })
@@ -56,9 +60,10 @@ impl H3DatagramSettingValue {
 ///
 /// # Errors
 ///
-/// Returns [`Error::H3Settings`] if `value` is not `0` or `1`.
+/// Returns [`Error::H3DatagramSetting`] if `value` is not `0` or `1`.
 pub fn validate_h3_datagram_setting_value(value: u64) -> Result<()> {
-    H3DatagramSettingValue::new(value).map(|_| ())
+    H3DatagramSettingValue::new(value)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -91,14 +96,14 @@ mod tests {
         let err = H3DatagramSettingValue::new(2).unwrap_err();
         assert!(matches!(
             err,
-            Error::H3Settings {
+            Error::H3DatagramSetting {
                 setting: SETTINGS_H3_DATAGRAM,
                 value: 2,
             }
         ));
         assert_eq!(
             err.to_string(),
-            "invalid HTTP/3 setting 0x33: value must be 0 or 1, got 2"
+            "invalid HTTP/3 datagram setting 0x33: value must be 0 or 1, got 2"
         );
     }
 
@@ -107,7 +112,7 @@ mod tests {
         let err = H3DatagramSettingValue::new(u64::MAX).unwrap_err();
         assert!(matches!(
             err,
-            Error::H3Settings {
+            Error::H3DatagramSetting {
                 setting: SETTINGS_H3_DATAGRAM,
                 value: u64::MAX,
             }
@@ -125,14 +130,24 @@ mod tests {
         let err = validate_h3_datagram_setting_value(2).unwrap_err();
         assert!(matches!(
             err,
-            Error::H3Settings {
+            Error::H3DatagramSetting {
                 setting: SETTINGS_H3_DATAGRAM,
                 value: 2,
             }
         ));
         assert_eq!(
             err.to_string(),
-            "invalid HTTP/3 setting 0x33: value must be 0 or 1, got 2"
+            "invalid HTTP/3 datagram setting 0x33: value must be 0 or 1, got 2"
         );
+    }
+
+    #[test]
+    fn validate_helper_and_newtype_produce_identical_errors() {
+        for value in [2, u64::MAX] {
+            let helper_err = validate_h3_datagram_setting_value(value).unwrap_err();
+            let newtype_err = H3DatagramSettingValue::new(value).unwrap_err();
+            assert_eq!(helper_err.to_string(), newtype_err.to_string());
+            assert_eq!(helper_err, newtype_err);
+        }
     }
 }

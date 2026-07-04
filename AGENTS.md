@@ -67,8 +67,8 @@ The main library. It currently has no external dependencies and is marked
 `publish = false`. Public modules:
 
 - `config` — `Config` with validated `SocketAddr` bind/peer addresses.
-- `error` — `Error` enum (`InvalidConfig`, `NotImplemented`, `H3Settings`) and
-  `Result` alias.
+- `error` — `Error` enum (`InvalidConfig`, `NotImplemented`, `H3DatagramSetting`,
+  `H3SettingsConflict`, `H3DatagramError`) and `Result` alias.
 - `settings` — HTTP/3 setting constants such as `SETTINGS_H3_DATAGRAM`, the
   `H3DatagramSettingValue` newtype, and validation helpers.
 - `types` — `Protocol` enum (`ConnectUdp`, `ConnectIp`, `ConnectEthernet`) and
