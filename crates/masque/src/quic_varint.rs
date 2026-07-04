@@ -127,14 +127,13 @@ pub fn decode(buf: &[u8]) -> Result<(u64, usize)> {
 
 /// Decodes a QUIC variable-length integer starting at `offset` within `buf`.
 ///
-/// Returns the decoded value and the number of bytes consumed **from the
-/// start of the varint** (not from `offset`). Trailing bytes after the encoded
-/// integer are ignored.
+/// Returns the decoded value and the number of bytes consumed starting at
+/// `offset`. Trailing bytes after the encoded integer are ignored.
 ///
 /// # Errors
 ///
-/// Returns an error if `offset` is out of bounds, the buffer is too short to
-/// contain the encoded integer, or the encoding is non-canonical.
+/// Returns an error if `offset` is out of bounds or if the buffer is too
+/// short to contain the encoded integer.
 ///
 /// # Examples
 ///
@@ -147,7 +146,13 @@ pub fn decode(buf: &[u8]) -> Result<(u64, usize)> {
 /// assert_eq!(consumed, 2);
 /// ```
 pub fn decode_at(buf: &[u8], offset: usize) -> Result<(u64, usize)> {
-    if offset > buf.len() {
+    if buf.is_empty() {
+        return Err(Error::InvalidVarInt {
+            kind: VarIntErrorKind::EmptyBuffer,
+            message: "empty buffer".into(),
+        });
+    }
+    if offset >= buf.len() {
         return Err(Error::InvalidVarInt {
             kind: VarIntErrorKind::BufferTooShort,
             message: "offset out of bounds".into(),
@@ -392,6 +397,19 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn decode_at_rejects_offset_equal_to_buffer_length() {
+        let err = decode_at(&[0x40, 0x40], 2).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidVarInt {
+                kind: VarIntErrorKind::BufferTooShort,
+                ..
+            }
+        ));
+        assert_eq!(err.to_string(), "invalid varint: offset out of bounds");
     }
 
     #[test]
