@@ -28,7 +28,32 @@ pub fn encode(value: u64) -> Vec<u8> {
 ///
 /// Returns the decoded value and the number of bytes consumed.
 pub fn decode(buf: &[u8]) -> Result<(u64, usize)> {
-    todo!()
+    if buf.is_empty() {
+        return Err(Error::InvalidVarInt {
+            message: "empty buffer".into(),
+        });
+    }
+
+    let first = buf[0];
+    let (len, mask) = match first >> 6 {
+        0b00 => (1, 0x3f),
+        0b01 => (2, 0x3fff),
+        0b10 => (4, 0x3fffffff),
+        0b11 => (8, 0x3fffffffffffffff),
+        _ => unreachable!(),
+    };
+
+    if buf.len() < len {
+        return Err(Error::InvalidVarInt {
+            message: "buffer too short".into(),
+        });
+    }
+
+    let mut bytes = [0u8; 8];
+    bytes[8 - len..].copy_from_slice(&buf[..len]);
+    let value = u64::from_be_bytes(bytes) & mask;
+
+    Ok((value, len))
 }
 
 #[cfg(test)]
@@ -69,5 +94,49 @@ mod tests {
     #[should_panic(expected = "value exceeds 2^62 - 1")]
     fn encode_panics_on_oversized_values() {
         encode(MAX_VARINT + 1);
+    }
+
+    #[test]
+    fn decode_round_trips_boundary_values() {
+        let values = [
+            0u64,
+            63,
+            64,
+            16_383,
+            16_384,
+            1_073_741_823,
+            1_073_741_824,
+            MAX_VARINT,
+        ];
+        for value in values {
+            let encoded = encode(value);
+            let (decoded, consumed) = decode(&encoded).unwrap();
+            assert_eq!(decoded, value);
+            assert_eq!(consumed, encoded.len());
+        }
+    }
+
+    #[test]
+    fn decode_rejects_empty_buffer() {
+        let err = decode(&[]).unwrap_err();
+        assert_eq!(err.to_string(), "invalid varint: empty buffer");
+    }
+
+    #[test]
+    fn decode_rejects_short_buffer_for_two_byte_form() {
+        let err = decode(&[0x40]).unwrap_err();
+        assert_eq!(err.to_string(), "invalid varint: buffer too short");
+    }
+
+    #[test]
+    fn decode_rejects_short_buffer_for_four_byte_form() {
+        let err = decode(&[0x80, 0x00, 0x00]).unwrap_err();
+        assert_eq!(err.to_string(), "invalid varint: buffer too short");
+    }
+
+    #[test]
+    fn decode_rejects_short_buffer_for_eight_byte_form() {
+        let err = decode(&[0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]).unwrap_err();
+        assert_eq!(err.to_string(), "invalid varint: buffer too short");
     }
 }
