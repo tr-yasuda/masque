@@ -31,10 +31,7 @@ pub use capsule_protocol::{
 };
 pub use config::Config;
 pub use datagram::{DatagramPayload, HttpDatagram, MAX_QUARTER_STREAM_ID};
-pub use error::{
-    Error, H3_DATAGRAM_ERROR_CODE, H3DatagramErrorKind, H3DatagramErrorMessage, Result,
-    VarIntErrorKind,
-};
+pub use error::{Error, H3_DATAGRAM_ERROR_CODE, H3DatagramErrorKind, Result, VarIntErrorKind};
 pub use settings::{
     H3DatagramSettingValue, SETTINGS_H3_DATAGRAM, validate_h3_datagram_setting_value,
 };
