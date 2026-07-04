@@ -21,5 +21,5 @@ pub mod error;
 pub mod types;
 
 pub use config::Config;
-pub use error::{Error, Result};
+pub use error::{Error, H3_DATAGRAM_ERROR_CODE, Result};
 pub use types::{Protocol, Session};
