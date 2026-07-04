@@ -289,6 +289,23 @@ impl CapsuleParser {
         self.try_parse()
     }
 
+    /// Signal the end of the stream and verify that no partial capsule remains.
+    ///
+    /// Returns `Ok(())` if the internal buffer is empty. If any bytes are left
+    /// buffered when the stream ends, returns [`Error::H3DatagramError`] with
+    /// kind [`H3DatagramErrorKind::Truncated`], mirroring the behavior of
+    /// [`Capsule::decode`] for a truncated final capsule.
+    pub fn finalize(self) -> Result<()> {
+        if self.start >= self.buf.len() {
+            Ok(())
+        } else {
+            Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::Truncated,
+                "capsule truncated at end of stream",
+            ))
+        }
+    }
+
     fn try_parse(&mut self) -> Result<Option<Capsule>> {
         let window = match self.buf.get(self.start..) {
             Some(w) if !w.is_empty() => w,
@@ -681,5 +698,53 @@ mod tests {
             }
         ));
         assert_eq!(buf, [0x9f; 3]);
+    }
+
+    #[test]
+    fn finalize_accepts_empty_buffer() {
+        let parser = CapsuleParser::new();
+        assert!(parser.finalize().is_ok());
+    }
+
+    #[test]
+    fn finalize_rejects_partial_type() {
+        let mut parser = CapsuleParser::new();
+        assert_eq!(parser.feed(&[0xc0]).unwrap(), None);
+        let err = parser.finalize().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::Truncated,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn finalize_rejects_partial_length() {
+        let mut parser = CapsuleParser::new();
+        assert_eq!(parser.feed(&[0x00, 0xc0]).unwrap(), None);
+        let err = parser.finalize().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::Truncated,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn finalize_rejects_partial_value() {
+        let mut parser = CapsuleParser::new();
+        assert_eq!(parser.feed(&[0x00, 0x05, 0x01, 0x02]).unwrap(), None);
+        let err = parser.finalize().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::Truncated,
+                ..
+            }
+        ));
     }
 }
