@@ -92,4 +92,4 @@ cargo run --package masque --example connect_udp_proxy -- 0.0.0.0:8443 127.0.0.1
 
 ## License
 
-This project is licensed under the MIT License ([LICENSE-MIT](LICENSE-MIT)).
+This project is licensed under the MIT License ([LICENSE](LICENSE)).

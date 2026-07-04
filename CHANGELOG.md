@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Integration test scaffold.
 - `xtask` helper for running fmt, clippy, doc, and tests.
 - GitHub Actions CI workflow.
-- README, CONTRIBUTING, SECURITY, and `LICENSE-MIT` files.
+- README, CONTRIBUTING, SECURITY, and `LICENSE` files.
 
 ### Changed
 
