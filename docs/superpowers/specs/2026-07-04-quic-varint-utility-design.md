@@ -18,6 +18,7 @@ RFC 9297 (and RFC 9000 QUIC) use variable-length integers for fields such as Cap
   - `pub fn encode(value: u64) -> Vec<u8>`
   - `pub fn try_encode(value: u64) -> Result<Vec<u8>, Error>`
   - `pub fn encode_into(value: u64, buf: &mut [u8]) -> Result<usize, Error>`
+  - `pub fn encode_into_at(value: u64, buf: &mut [u8], offset: usize) -> Result<usize, Error>`
   - `pub fn decode(buf: &[u8]) -> Result<(u64, usize), Error>`
   - `pub fn decode_at(buf: &[u8], offset: usize) -> Result<(u64, usize), Error>`
 - Support 1-, 2-, 4-, and 8-byte encodings as defined in RFC 9000 Section 16.
@@ -32,7 +33,7 @@ RFC 9297 (and RFC 9000 QUIC) use variable-length integers for fields such as Cap
 
 | File | Change |
 |---|---|
-| `crates/masque/src/quic_varint.rs` | New module implementing `encode`, `try_encode`, `encode_into`, `decode`, and `decode_at`. |
+| `crates/masque/src/quic_varint.rs` | New module implementing `encode`, `try_encode`, `encode_into`, `encode_into_at`, `decode`, and `decode_at`. |
 | `crates/masque/src/lib.rs` | Add `pub mod quic_varint;` and re-export `VarIntErrorKind`. |
 | `crates/masque/src/error.rs` | Add `Error::InvalidVarInt { kind: VarIntErrorKind, message: String }` and the `VarIntErrorKind` enum. |
 | `crates/masque/tests/integration_test.rs` | Add integration tests for the public varint API. |
@@ -65,12 +66,13 @@ A new `Error::InvalidVarInt { kind: VarIntErrorKind, message: String }` variant 
 
 - `EmptyBuffer`
 - `BufferTooShort`
+- `OffsetOutOfBounds`
 - `ValueTooLarge`
 
 `Display` implementation:
 
 ```text
-invalid varint: {message}
+invalid varint ({kind:?}): {message}
 ```
 
 ### Testing
@@ -89,7 +91,7 @@ Test cases:
   - `1_073_741_824`
   - `4_611_686_018_427_387_903` (`2^62 - 1`)
 - `try_encode` rejects values `>= 2^62`.
-- `encode_into` writes expected bytes and rejects short buffers.
+- `encode_into` and `encode_into_at` write expected bytes and reject short buffers.
 - `decode_at` reads from an offset and rejects out-of-bounds offsets.
 - Decode rejects empty buffers.
 - Decode rejects buffers shorter than the indicated length for each encoding size.
