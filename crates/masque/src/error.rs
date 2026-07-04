@@ -17,6 +17,12 @@ pub enum Error {
         message: String,
     },
 
+    /// The variable-length integer encoding or decoding failed.
+    InvalidVarInt {
+        /// A human-readable description of what is wrong.
+        message: String,
+    },
+
     /// A requested operation is not yet implemented.
     NotImplemented {
         /// Description of the missing feature.
@@ -30,6 +36,7 @@ impl fmt::Display for Error {
             Error::InvalidConfig { field, message } => {
                 write!(f, "invalid configuration for {field}: {message}")
             }
+            Error::InvalidVarInt { message } => write!(f, "invalid varint: {message}"),
             Error::NotImplemented { message } => write!(f, "not implemented: {message}"),
         }
     }
@@ -69,5 +76,13 @@ mod tests {
         };
         let cloned = err.clone();
         assert_eq!(err.to_string(), cloned.to_string());
+    }
+
+    #[test]
+    fn invalid_var_int_display_includes_message() {
+        let err = Error::InvalidVarInt {
+            message: "value too large".into(),
+        };
+        assert_eq!(err.to_string(), "invalid varint: value too large");
     }
 }
