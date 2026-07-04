@@ -99,6 +99,8 @@ pub enum VarIntErrorKind {
 pub enum H3DatagramErrorKind {
     /// A generic error not covered by a more specific kind.
     Generic,
+    /// A QUIC variable-length integer in a capsule header was malformed.
+    InvalidVarint,
     /// A QUIC variable-length integer value was out of range.
     VarintOutOfRange,
     /// The capsule length does not fit in a platform `usize`.

@@ -132,15 +132,14 @@ impl Capsule {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidVarInt`] if the buffer does not contain a valid
-    /// QUIC variable-length integer for the capsule type or length. Returns
-    /// [`Error::H3DatagramError`] for capsule framing errors such as a length
-    /// that overflows `usize`, an offset overflow, or a truncated value.
+    /// Returns [`Error::H3DatagramError`] if the buffer does not contain a
+    /// well-formed capsule. This includes malformed capsule type/length varints,
+    /// a length that overflows `usize`, an offset overflow, or a truncated value.
     pub fn decode(buf: &[u8]) -> Result<(Self, usize)> {
-        let (capsule_type_value, mut offset) = quic_varint::decode(buf)?;
+        let (capsule_type_value, mut offset) = quic_varint::decode(buf).map_err(map_varint_err)?;
         let capsule_type = CapsuleType::new(capsule_type_value)?;
 
-        let (length, consumed) = quic_varint::decode_at(buf, offset)?;
+        let (length, consumed) = quic_varint::decode_at(buf, offset).map_err(map_varint_err)?;
         offset += consumed;
 
         let length = usize::try_from(length).map_err(|_| Error::H3DatagramError {
@@ -187,10 +186,16 @@ fn validate_length(len: usize) -> Result<()> {
     Ok(())
 }
 
+fn map_varint_err(_err: Error) -> Error {
+    Error::H3DatagramError {
+        kind: H3DatagramErrorKind::InvalidVarint,
+        message: "malformed capsule varint".into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::VarIntErrorKind;
 
     #[test]
     fn capsule_type_datagram_value_is_zero() {
@@ -302,15 +307,16 @@ mod tests {
     }
 
     #[test]
-    fn capsule_decode_propagates_truncated_header_as_invalid_varint() {
+    fn capsule_decode_wraps_truncated_header_in_h3_datagram_error() {
         let err = Capsule::decode(&[0xc0]).unwrap_err();
         assert!(matches!(
             err,
-            Error::InvalidVarInt {
-                kind: VarIntErrorKind::BufferTooShort,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::InvalidVarint,
                 ..
             }
         ));
+        assert!(err.to_string().contains("malformed capsule varint"));
     }
 
     #[test]

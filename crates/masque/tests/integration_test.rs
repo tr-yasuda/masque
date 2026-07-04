@@ -482,15 +482,16 @@ fn capsule_decode_rejects_truncated_value_from_public_api() {
 }
 
 #[test]
-fn capsule_decode_propagates_invalid_varint_header_from_public_api() {
+fn capsule_decode_wraps_invalid_varint_header_in_h3_datagram_error_from_public_api() {
     let err = Capsule::decode(&[0xc0]).unwrap_err();
     assert!(matches!(
         err,
-        Error::InvalidVarInt {
-            kind: VarIntErrorKind::BufferTooShort,
+        Error::H3DatagramError {
+            kind: H3DatagramErrorKind::InvalidVarint,
             ..
         }
     ));
+    assert!(err.to_string().contains("malformed capsule varint"));
 }
 
 #[test]
