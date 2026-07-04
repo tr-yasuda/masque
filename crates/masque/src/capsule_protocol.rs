@@ -24,7 +24,7 @@ pub const CAPSULE_PROTOCOL: &str = "capsule-protocol";
 /// should therefore check `result == Some(true)` rather than `is_some()`.
 #[must_use]
 pub fn parse_capsule_protocol(value: &str) -> Option<bool> {
-    let value = trim_ows(value);
+    let value = trim_sp(value);
     let bytes = value.as_bytes();
 
     if bytes.len() < 2 || bytes[0] != b'?' {
@@ -58,11 +58,9 @@ pub const fn serialize_capsule_protocol(value: bool) -> &'static str {
     if value { "?1" } else { "?0" }
 }
 
-/// Strip optional leading and trailing whitespace as allowed by RFC 8941.
-fn trim_ows(value: &str) -> &str {
-    value
-        .trim_start_matches([' ', '\t'])
-        .trim_end_matches([' ', '\t'])
+/// Strip optional leading and trailing SP characters as allowed by RFC 8941.
+fn trim_sp(value: &str) -> &str {
+    value.trim_start_matches(' ').trim_end_matches(' ')
 }
 
 /// Validate the remainder of a Boolean Item, which consists only of parameters.
@@ -320,11 +318,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_leading_and_trailing_whitespace_returns_boolean() {
+    fn parse_leading_and_trailing_sp_returns_boolean() {
         assert_eq!(parse_capsule_protocol(" ?1"), Some(true));
         assert_eq!(parse_capsule_protocol("?1 "), Some(true));
         assert_eq!(parse_capsule_protocol("  ?1  "), Some(true));
-        assert_eq!(parse_capsule_protocol("\t?0\t"), Some(false));
+    }
+
+    #[test]
+    fn parse_leading_or_trailing_htab_returns_none() {
+        assert_eq!(parse_capsule_protocol("\t?1"), None);
+        assert_eq!(parse_capsule_protocol("?1\t"), None);
+        assert_eq!(parse_capsule_protocol("\t?0\t"), None);
     }
 
     #[test]
@@ -400,7 +404,6 @@ mod tests {
     fn parse_empty_or_whitespace_value_returns_none() {
         assert_eq!(parse_capsule_protocol(""), None);
         assert_eq!(parse_capsule_protocol("   "), None);
-        assert_eq!(parse_capsule_protocol("\t\t"), None);
     }
 
     #[test]
