@@ -186,6 +186,12 @@ pub fn decode(buf: &[u8]) -> Result<(u64, usize)> {
 /// assert_eq!(consumed, 2);
 /// ```
 pub fn decode_at(buf: &[u8], offset: usize) -> Result<(u64, usize)> {
+    if buf.is_empty() && offset == 0 {
+        return Err(Error::InvalidVarInt {
+            kind: VarIntErrorKind::EmptyBuffer,
+            message: "empty buffer".into(),
+        });
+    }
     if offset >= buf.len() {
         return Err(Error::InvalidVarInt {
             kind: VarIntErrorKind::OffsetOutOfBounds,
