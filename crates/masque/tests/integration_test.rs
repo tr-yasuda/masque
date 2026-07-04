@@ -548,13 +548,17 @@ fn udp_echo_server_example_echoes_datagrams() {
         .join("debug/examples/udp_echo_server")
         .with_extension(if cfg!(windows) { "exe" } else { "" });
 
-    let mut server = Command::new(&exe)
-        .arg("127.0.0.1:0")
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("failed to spawn udp_echo_server");
+    // Wrap the Child in a guard immediately after spawning so it is killed even
+    // if an assertion panics before we finish reading stdout.
+    let mut server = KillOnDrop(
+        Command::new(&exe)
+            .arg("127.0.0.1:0")
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn udp_echo_server"),
+    );
 
-    let stdout = server.stdout.take().expect("server stdout not captured");
+    let stdout = server.0.stdout.take().expect("server stdout not captured");
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout).lines();
@@ -567,9 +571,6 @@ fn udp_echo_server_example_echoes_datagrams() {
         .expect("server did not produce output within timeout")
         .expect("failed to read server output")
         .expect("server produced no output");
-
-    // Wrap the Child in a guard so it is killed even if an assertion panics.
-    let mut server = KillOnDrop(server);
 
     // Parse "UDP echo server listening on 127.0.0.1:PORT"
     let addr: SocketAddr = first_line
