@@ -4,8 +4,8 @@
 //! starting with CONNECT-UDP over HTTP/3.
 //!
 //! This crate is intentionally small at the moment. It provides the initial
-//! types, errors, and configuration primitives that future protocol logic will
-//! build on.
+//! types, errors, configuration primitives, and a `Capsule-Protocol` header
+//! helper that future protocol logic will build on.
 //!
 //! ## Current status
 //!
@@ -16,12 +16,14 @@
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 
+pub mod capsule_protocol;
 pub mod config;
 pub mod error;
 pub mod quic_varint;
 pub mod settings;
 pub mod types;
 
+pub use capsule_protocol::{CAPSULE_PROTOCOL, parse_capsule_protocol, serialize_capsule_protocol};
 pub use config::Config;
 pub use error::{Error, H3_DATAGRAM_ERROR_CODE, Result, VarIntErrorKind};
 pub use settings::{

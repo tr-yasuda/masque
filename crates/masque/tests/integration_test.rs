@@ -11,8 +11,9 @@ use std::time::Duration;
 
 use masque::quic_varint::{self, MAX_VARINT};
 use masque::{
-    Config, Error, H3DatagramSettingValue, Protocol, SETTINGS_H3_DATAGRAM, Session,
-    VarIntErrorKind, validate_h3_datagram_setting_value,
+    CAPSULE_PROTOCOL, Config, Error, H3DatagramSettingValue, Protocol, SETTINGS_H3_DATAGRAM,
+    Session, VarIntErrorKind, parse_capsule_protocol, serialize_capsule_protocol,
+    validate_h3_datagram_setting_value,
 };
 
 #[test]
@@ -358,6 +359,26 @@ fn quic_varint_decode_at_reads_from_offset() {
 #[test]
 fn max_varint_is_publicly_accessible() {
     assert_eq!(MAX_VARINT, 4_611_686_018_427_387_903);
+}
+
+#[test]
+fn capsule_protocol_header_name_is_accessible_at_crate_root() {
+    assert_eq!(CAPSULE_PROTOCOL, "capsule-protocol");
+}
+
+#[test]
+fn capsule_protocol_parses_and_serializes_at_crate_root() {
+    assert_eq!(parse_capsule_protocol("?1"), Some(true));
+    assert_eq!(parse_capsule_protocol("?0"), Some(false));
+    assert_eq!(parse_capsule_protocol(" ?1;foo=bar "), Some(true));
+    assert_eq!(parse_capsule_protocol("true"), None);
+
+    for value in [true, false] {
+        assert_eq!(
+            parse_capsule_protocol(serialize_capsule_protocol(value)),
+            Some(value)
+        );
+    }
 }
 
 #[test]
