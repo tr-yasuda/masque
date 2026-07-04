@@ -9,7 +9,9 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use masque::{Config, Error, Protocol, Session};
+use masque::{
+    Config, Error, Protocol, SETTINGS_H3_DATAGRAM, Session, validate_h3_datagram_setting_value,
+};
 
 #[test]
 fn config_parses_and_exposes_socket_addresses() {
@@ -77,6 +79,47 @@ fn error_can_be_cloned() {
     };
     let cloned = err.clone();
     assert_eq!(err, cloned);
+}
+
+#[test]
+fn settings_h3_datagram_constant_matches_rfc9297() {
+    assert_eq!(SETTINGS_H3_DATAGRAM, 0x33);
+}
+
+#[test]
+fn validate_h3_datagram_setting_value_accepts_valid_values() {
+    assert!(validate_h3_datagram_setting_value(0).is_ok());
+    assert!(validate_h3_datagram_setting_value(1).is_ok());
+}
+
+#[test]
+fn validate_h3_datagram_setting_value_rejects_invalid_values() {
+    let err = validate_h3_datagram_setting_value(2).unwrap_err();
+    assert!(matches!(err, Error::H3Settings { .. }));
+    assert!(err.to_string().contains("got 2"));
+}
+
+#[test]
+fn session_reports_h3_datagram_enabled_only_when_both_sides_agree() {
+    let mut session = Session::new(Protocol::ConnectUdp);
+    assert!(!session.is_h3_datagram_enabled());
+
+    session.set_local_h3_datagram(true);
+    assert!(!session.is_h3_datagram_enabled());
+
+    session.negotiate_peer_h3_datagram(1).unwrap();
+    assert!(session.is_h3_datagram_enabled());
+
+    session.set_local_h3_datagram(false);
+    assert!(!session.is_h3_datagram_enabled());
+}
+
+#[test]
+fn session_rejects_invalid_peer_h3_datagram_value() {
+    let mut session = Session::new(Protocol::ConnectUdp);
+    let err = session.negotiate_peer_h3_datagram(2).unwrap_err();
+    assert!(matches!(err, Error::H3Settings { .. }));
+    assert!(err.to_string().contains("got 2"));
 }
 
 #[test]

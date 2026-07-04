@@ -18,8 +18,12 @@
 
 pub mod config;
 pub mod error;
+pub mod settings;
 pub mod types;
 
 pub use config::Config;
 pub use error::{Error, Result};
+pub use settings::{
+    H3DatagramSettingValue, SETTINGS_H3_DATAGRAM, validate_h3_datagram_setting_value,
+};
 pub use types::{Protocol, Session};

@@ -22,6 +22,14 @@ pub enum Error {
         /// Description of the missing feature.
         message: String,
     },
+
+    /// An HTTP/3 settings value was invalid.
+    H3Settings {
+        /// The setting identifier that was invalid.
+        setting: u64,
+        /// The invalid value received from the peer.
+        value: u64,
+    },
 }
 
 impl fmt::Display for Error {
@@ -31,6 +39,10 @@ impl fmt::Display for Error {
                 write!(f, "invalid configuration for {field}: {message}")
             }
             Error::NotImplemented { message } => write!(f, "not implemented: {message}"),
+            Error::H3Settings { setting, value } => write!(
+                f,
+                "invalid HTTP/3 setting {setting:#x}: value must be 0 or 1, got {value}"
+            ),
         }
     }
 }
@@ -63,11 +75,35 @@ mod tests {
 
     #[test]
     fn error_is_cloneable() {
-        let err = Error::InvalidConfig {
-            field: "peer_addr",
-            message: "invalid".into(),
+        let errors = [
+            Error::InvalidConfig {
+                field: "peer_addr",
+                message: "invalid".into(),
+            },
+            Error::NotImplemented {
+                message: "CONNECT-UDP proxy".into(),
+            },
+            Error::H3Settings {
+                setting: 0x33,
+                value: 2,
+            },
+        ];
+        for err in errors {
+            let cloned = err.clone();
+            assert_eq!(err.to_string(), cloned.to_string());
+            assert_eq!(err, cloned);
+        }
+    }
+
+    #[test]
+    fn h3_settings_display_includes_setting_and_value() {
+        let err = Error::H3Settings {
+            setting: 0x33,
+            value: 2,
         };
-        let cloned = err.clone();
-        assert_eq!(err.to_string(), cloned.to_string());
+        assert_eq!(
+            err.to_string(),
+            "invalid HTTP/3 setting 0x33: value must be 0 or 1, got 2"
+        );
     }
 }
