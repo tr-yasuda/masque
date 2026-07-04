@@ -18,6 +18,7 @@
 
 pub mod capsule_protocol;
 pub mod config;
+pub mod datagram;
 pub mod error;
 pub mod quic_varint;
 pub mod settings;
@@ -25,6 +26,7 @@ pub mod types;
 
 pub use capsule_protocol::{CAPSULE_PROTOCOL, parse_capsule_protocol, serialize_capsule_protocol};
 pub use config::Config;
+pub use datagram::{DatagramPayload, HttpDatagram};
 pub use error::{Error, H3_DATAGRAM_ERROR_CODE, Result, VarIntErrorKind};
 pub use settings::{
     H3DatagramSettingValue, SETTINGS_H3_DATAGRAM, validate_h3_datagram_setting_value,

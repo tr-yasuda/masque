@@ -11,9 +11,9 @@ use std::time::Duration;
 
 use masque::quic_varint::{self, MAX_VARINT};
 use masque::{
-    CAPSULE_PROTOCOL, Config, Error, H3DatagramSettingValue, Protocol, SETTINGS_H3_DATAGRAM,
-    Session, VarIntErrorKind, parse_capsule_protocol, serialize_capsule_protocol,
-    validate_h3_datagram_setting_value,
+    CAPSULE_PROTOCOL, Config, DatagramPayload, Error, H3DatagramSettingValue, HttpDatagram,
+    Protocol, SETTINGS_H3_DATAGRAM, Session, VarIntErrorKind, parse_capsule_protocol,
+    serialize_capsule_protocol, validate_h3_datagram_setting_value,
 };
 
 #[test]
@@ -359,6 +359,52 @@ fn quic_varint_decode_at_reads_from_offset() {
 #[test]
 fn max_varint_is_publicly_accessible() {
     assert_eq!(MAX_VARINT, 4_611_686_018_427_387_903);
+}
+
+#[test]
+fn http_datagram_can_be_constructed_with_valid_stream_id() {
+    let datagram = HttpDatagram::new(0, b"hello").unwrap();
+    assert_eq!(datagram.stream_id(), 0);
+    assert_eq!(datagram.payload(), b"hello");
+}
+
+#[test]
+fn http_datagram_rejects_invalid_stream_id() {
+    let err = HttpDatagram::new(1, b"hello").unwrap_err();
+    assert!(matches!(err, Error::H3DatagramError { .. }));
+}
+
+#[test]
+fn http_datagram_round_trips_payload_through_parts() {
+    let payload = vec![1, 2, 3];
+    let datagram = HttpDatagram::new(4, payload.clone()).unwrap();
+    let (stream_id, got_payload) = datagram.into_parts();
+    assert_eq!(stream_id, 4);
+    assert_eq!(got_payload, payload);
+}
+
+/// A simple payload type used to exercise the public [`DatagramPayload`] trait.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TestPayload(Vec<u8>);
+
+impl DatagramPayload for TestPayload {
+    type Error = Error;
+
+    fn encode(&self) -> std::result::Result<Vec<u8>, Self::Error> {
+        Ok(self.0.clone())
+    }
+
+    fn decode(payload: &[u8]) -> std::result::Result<Self, Self::Error> {
+        Ok(Self(payload.to_vec()))
+    }
+}
+
+#[test]
+fn datagram_payload_trait_round_trips_through_public_api() {
+    let original = TestPayload(vec![1, 2, 3]);
+    let encoded = original.encode().unwrap();
+    let decoded = TestPayload::decode(&encoded).unwrap();
+    assert_eq!(original, decoded);
 }
 
 #[test]
