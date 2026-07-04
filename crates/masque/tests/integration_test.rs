@@ -9,6 +9,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use masque::quic_varint::{self, MAX_VARINT};
 use masque::{Config, Error, Protocol, Session};
 
 #[test]
@@ -77,6 +78,51 @@ fn error_can_be_cloned() {
     };
     let cloned = err.clone();
     assert_eq!(err, cloned);
+}
+
+#[test]
+fn invalid_var_int_error_can_be_created() {
+    let err = Error::InvalidVarInt {
+        message: "buffer too short".into(),
+    };
+    assert!(err.to_string().contains("buffer too short"));
+}
+
+#[test]
+fn quic_varint_round_trips_boundary_values() {
+    let values = [
+        0u64,
+        63,
+        64,
+        16_383,
+        16_384,
+        1_073_741_823,
+        1_073_741_824,
+        MAX_VARINT,
+    ];
+    for value in values {
+        let encoded = quic_varint::encode(value);
+        let (decoded, consumed) = quic_varint::decode(&encoded).unwrap();
+        assert_eq!(decoded, value);
+        assert_eq!(consumed, encoded.len());
+    }
+}
+
+#[test]
+fn quic_varint_decode_rejects_invalid_input() {
+    let err = quic_varint::decode(&[]).unwrap_err();
+    assert!(matches!(err, Error::InvalidVarInt { .. }));
+
+    let err = quic_varint::decode(&[0x40]).unwrap_err();
+    assert!(err.to_string().contains("buffer too short"));
+
+    let err = quic_varint::decode(&[0x40, 0x05]).unwrap_err();
+    assert!(err.to_string().contains("non-canonical encoding"));
+}
+
+#[test]
+fn max_varint_is_publicly_accessible() {
+    assert_eq!(MAX_VARINT, 4_611_686_018_427_387_903);
 }
 
 #[test]

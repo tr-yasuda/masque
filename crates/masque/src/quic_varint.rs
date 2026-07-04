@@ -3,21 +3,35 @@
 use crate::error::{Error, Result};
 
 /// Maximum value representable by a QUIC variable-length integer.
-const MAX_VARINT: u64 = 4_611_686_018_427_387_903; // 2^62 - 1
+pub const MAX_VARINT: u64 = 4_611_686_018_427_387_903; // 2^62 - 1
 
 /// Encodes a value as a QUIC variable-length integer.
 ///
+/// Returns the encoded bytes. The output length is 1, 2, 4, or 8 bytes
+/// depending on the magnitude of `value`.
+///
 /// # Panics
 ///
-/// Panics if `value` is greater than `2^62 - 1`.
+/// Panics if `value` is greater than [`MAX_VARINT`].
+///
+/// # Examples
+///
+/// ```
+/// use masque::quic_varint::encode;
+///
+/// assert_eq!(encode(0), vec![0x00]);
+/// assert_eq!(encode(64), vec![0x40, 0x40]);
+/// ```
 pub fn encode(value: u64) -> Vec<u8> {
     assert!(value <= MAX_VARINT, "value exceeds 2^62 - 1");
 
     if value <= 0x3f {
         vec![value as u8]
     } else if value <= 0x3fff {
+        // `u64::to_be_bytes()` returns 8 bytes; take the trailing 2 bytes.
         (value | 0x4000).to_be_bytes()[6..].to_vec()
     } else if value <= 0x3fffffff {
+        // `u64::to_be_bytes()` returns 8 bytes; take the trailing 4 bytes.
         (value | 0x80000000).to_be_bytes()[4..].to_vec()
     } else {
         (value | 0xc000000000000000).to_be_bytes().to_vec()
@@ -26,7 +40,19 @@ pub fn encode(value: u64) -> Vec<u8> {
 
 /// Decodes a QUIC variable-length integer from a byte buffer.
 ///
-/// Returns the decoded value and the number of bytes consumed.
+/// Returns the decoded value and the number of bytes consumed. Trailing bytes
+/// after the encoded integer are ignored; callers must use the returned length
+/// to advance the buffer when parsing multiple varints.
+///
+/// # Examples
+///
+/// ```
+/// use masque::quic_varint::decode;
+///
+/// let (value, consumed) = decode(&[0x40, 0x40]).unwrap();
+/// assert_eq!(value, 64);
+/// assert_eq!(consumed, 2);
+/// ```
 pub fn decode(buf: &[u8]) -> Result<(u64, usize)> {
     if buf.is_empty() {
         return Err(Error::InvalidVarInt {
@@ -54,6 +80,7 @@ pub fn decode(buf: &[u8]) -> Result<(u64, usize)> {
     let value = u64::from_be_bytes(bytes) & mask;
 
     let min_value_for_len = match len {
+        // The 1-byte form covers 0..=0x3f, so any value it produces is valid.
         1 => 0,
         2 => 0x40,
         4 => 0x4000,
