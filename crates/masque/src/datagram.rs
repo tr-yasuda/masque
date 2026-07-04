@@ -2,15 +2,6 @@
 
 use crate::{Error, Result};
 
-/// Maximum payload size for an HTTP datagram.
-///
-/// HTTP/3 datagrams are ultimately carried in QUIC DATAGRAM frames, whose
-/// length field is 16 bits (RFC 9000 Section 19.17). This constant reserves the
-/// maximum possible payload before accounting for the Quarter Stream ID
-/// encoding overhead; callers that need a tighter limit should enforce it
-/// based on the negotiated `max_datagram_frame_size`.
-pub const MAX_HTTP_DATAGRAM_PAYLOAD_SIZE: usize = u16::MAX as usize;
-
 /// The largest stream ID allowed by QUIC (RFC 9000 Section 2.1).
 const MAX_QUIC_STREAM_ID: u64 = (1 << 62) - 1;
 
@@ -25,6 +16,12 @@ const MAX_QUIC_STREAM_ID: u64 = (1 << 62) - 1;
 /// This type is transport-agnostic: it represents the abstract payload and
 /// its request association, independent of whether the datagram is encoded
 /// as an HTTP/3 Datagram frame or a DATAGRAM capsule.
+///
+/// # Payload size
+///
+/// `HttpDatagram` does not impose a payload-size limit. The actual limit is
+/// negotiated by the HTTP/3 connection (`max_datagram_frame_size`) and is
+/// enforced by the transport layer when encoding frames or capsules.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct HttpDatagram {
     /// The request stream identifier with which this datagram is associated.
@@ -41,17 +38,15 @@ impl HttpDatagram {
     ///
     /// `stream_id` must be a valid client-initiated bidirectional QUIC stream
     /// ID (`stream_id % 4 == 0` and `stream_id <= 2^62 - 1`), because RFC 9297
-    /// associates HTTP datagrams only with such request streams. `payload` must
-    /// not exceed [`MAX_HTTP_DATAGRAM_PAYLOAD_SIZE`].
+    /// associates HTTP datagrams only with such request streams.
     ///
     /// # Errors
     ///
-    /// Returns [`crate::Error::H3DatagramError`] if `stream_id` or `payload`
-    /// violate the constraints above.
+    /// Returns [`crate::Error::H3DatagramError`] if `stream_id` violates the
+    /// constraints above.
     pub fn new(stream_id: u64, payload: impl Into<Vec<u8>>) -> Result<Self> {
         let payload = payload.into();
         Self::validate_stream_id(stream_id)?;
-        Self::validate_payload_size(&payload)?;
         Ok(Self { stream_id, payload })
     }
 
@@ -88,16 +83,6 @@ impl HttpDatagram {
         if stream_id % 4 != 0 {
             return Err(Error::H3DatagramError {
                 message: "stream ID is not a client-initiated bidirectional stream ID".into(),
-            });
-        }
-        Ok(())
-    }
-
-    fn validate_payload_size(payload: &[u8]) -> Result<()> {
-        let len = payload.len();
-        if len > MAX_HTTP_DATAGRAM_PAYLOAD_SIZE {
-            return Err(Error::H3DatagramError {
-                message: "HTTP datagram payload exceeds the maximum allowed size".into(),
             });
         }
         Ok(())
@@ -200,21 +185,6 @@ mod tests {
             err.to_string()
                 .contains("exceeds the maximum QUIC stream ID")
         );
-    }
-
-    #[test]
-    fn http_datagram_rejects_oversized_payload() {
-        let payload = vec![0; MAX_HTTP_DATAGRAM_PAYLOAD_SIZE + 1];
-        let err = HttpDatagram::new(0, payload).unwrap_err();
-        assert!(matches!(err, Error::H3DatagramError { .. }));
-        assert!(err.to_string().contains("payload exceeds the maximum"));
-    }
-
-    #[test]
-    fn http_datagram_accepts_maximum_payload_size() {
-        let payload = vec![0; MAX_HTTP_DATAGRAM_PAYLOAD_SIZE];
-        let datagram = HttpDatagram::new(0, payload.clone()).unwrap();
-        assert_eq!(datagram.payload().len(), MAX_HTTP_DATAGRAM_PAYLOAD_SIZE);
     }
 
     /// A small example payload type used to exercise the [`DatagramPayload`] trait.

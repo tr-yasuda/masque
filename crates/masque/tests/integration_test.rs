@@ -11,9 +11,8 @@ use std::time::Duration;
 
 use masque::quic_varint::{self, MAX_VARINT};
 use masque::{
-    Config, DatagramPayload, Error, H3DatagramSettingValue, HttpDatagram,
-    MAX_HTTP_DATAGRAM_PAYLOAD_SIZE, Protocol, SETTINGS_H3_DATAGRAM, Session, VarIntErrorKind,
-    validate_h3_datagram_setting_value,
+    Config, DatagramPayload, Error, H3DatagramSettingValue, HttpDatagram, Protocol,
+    SETTINGS_H3_DATAGRAM, Session, VarIntErrorKind, validate_h3_datagram_setting_value,
 };
 
 #[test]
@@ -371,13 +370,6 @@ fn http_datagram_can_be_constructed_with_valid_stream_id() {
 #[test]
 fn http_datagram_rejects_invalid_stream_id() {
     let err = HttpDatagram::new(1, b"hello").unwrap_err();
-    assert!(matches!(err, Error::H3DatagramError { .. }));
-}
-
-#[test]
-fn http_datagram_rejects_oversized_payload() {
-    let payload = vec![0; MAX_HTTP_DATAGRAM_PAYLOAD_SIZE + 1];
-    let err = HttpDatagram::new(0, payload).unwrap_err();
     assert!(matches!(err, Error::H3DatagramError { .. }));
 }
 
