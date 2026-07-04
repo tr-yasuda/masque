@@ -8,8 +8,10 @@ branch is supported.
 ## Reporting a vulnerability
 
 If you discover a security issue, please do not open a public issue. Instead,
-contact the maintainers privately so we can investigate and address it
-responsibly.
+use one of the following private channels:
+
+Open a draft [GitHub Security Advisory](https://github.com/tr-yasuda/masque/security/advisories/new)
+in this repository.
 
 Please include as much detail as possible, such as:
 

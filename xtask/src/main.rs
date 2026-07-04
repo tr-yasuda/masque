@@ -9,6 +9,8 @@
 use std::env;
 use std::process::{Command, ExitCode};
 
+type CheckFn = fn() -> ExitCode;
+
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().collect();
     let task = args.get(1).map_or("help", String::as_str);
@@ -17,6 +19,7 @@ fn main() -> ExitCode {
         "ci" => run_ci(),
         "fmt" => run_fmt(),
         "clippy" => run_clippy(),
+        "doc" => run_doc(),
         "test" => run_test(),
         _ => {
             print_help();
@@ -26,15 +29,28 @@ fn main() -> ExitCode {
 }
 
 fn run_ci() -> ExitCode {
-    let checks = [run_fmt, run_clippy, run_test];
-    for check in &checks {
-        let code = check();
-        if code != ExitCode::SUCCESS {
-            return code;
+    let checks: [(&str, CheckFn); 4] = [
+        ("fmt", run_fmt),
+        ("clippy", run_clippy),
+        ("doc", run_doc),
+        ("test", run_test),
+    ];
+
+    let mut failed = Vec::new();
+    for (name, check) in &checks {
+        println!("\nRunning {name} check...");
+        if check() != ExitCode::SUCCESS {
+            failed.push(*name);
         }
     }
-    println!("All CI checks passed.");
-    ExitCode::SUCCESS
+
+    if failed.is_empty() {
+        println!("\nAll CI checks passed.");
+        ExitCode::SUCCESS
+    } else {
+        eprintln!("\nFailed checks: {}", failed.join(", "));
+        ExitCode::FAILURE
+    }
 }
 
 fn run_fmt() -> ExitCode {
@@ -48,15 +64,27 @@ fn run_clippy() -> ExitCode {
         "clippy",
         "--workspace",
         "--all-targets",
+        "--locked",
         "--",
         "-D",
         "warnings",
     ]))
 }
 
+fn run_doc() -> ExitCode {
+    println!("Running cargo doc...");
+    run_command(Command::new("cargo").args([
+        "doc",
+        "--workspace",
+        "--no-deps",
+        "--document-private-items",
+        "--locked",
+    ]))
+}
+
 fn run_test() -> ExitCode {
     println!("Running cargo test...");
-    run_command(Command::new("cargo").args(["test", "--workspace"]))
+    run_command(Command::new("cargo").args(["test", "--workspace", "--locked"]))
 }
 
 fn run_command(cmd: &mut Command) -> ExitCode {
@@ -74,9 +102,10 @@ fn print_help() {
     println!("Development tasks for the masque workspace.\n");
     println!("Usage: cargo xtask <task>\n");
     println!("Tasks:");
-    println!("  ci      Run fmt, clippy, and test checks");
+    println!("  ci      Run fmt, clippy, doc, and test checks");
     println!("  fmt     Run cargo fmt --check");
     println!("  clippy  Run cargo clippy with warnings as errors");
+    println!("  doc     Run cargo doc and check for warnings");
     println!("  test    Run cargo test --workspace");
     println!("  help    Print this message");
 }

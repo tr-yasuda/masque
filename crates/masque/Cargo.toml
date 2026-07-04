@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 description = "A Rust library for MASQUE protocols (CONNECT-UDP, CONNECT-IP, CONNECT-Ethernet)."
 readme = "../../README.md"
+publish = false
 
 [dependencies]
 

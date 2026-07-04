@@ -6,7 +6,7 @@
 //! Usage:
 //!
 //! ```text
-//! cargo run --example udp_echo_client -- 127.0.0.1:3456 "hello"
+//! cargo run --package masque --example udp_echo_client -- 127.0.0.1:3456 "hello"
 //! ```
 
 use std::env;
@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     socket.send(message)?;
     println!("Sent {} bytes to {}", message.len(), server_addr);
 
-    let mut buf = [0u8; 1024];
+    let mut buf = [0u8; 65507];
     let n = socket.recv(&mut buf)?;
     let response = String::from_utf8_lossy(&buf[..n]);
     println!("Received: {}", response);

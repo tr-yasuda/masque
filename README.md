@@ -24,7 +24,7 @@ The long-term vision is to grow the `masque` crate into a reusable library for M
 - A `masque` core library crate containing types, errors, and configuration primitives.
 - Plain UDP echo client/server examples for local testing.
 - A `connect_udp_proxy.rs` example stub with TODOs for the MASQUE-specific logic.
-- A minimal `xtask` helper to run fmt, clippy, and tests.
+- A minimal `xtask` helper to run fmt, clippy, doc, and tests.
 - GitHub Actions CI that runs the same quality checks.
 
 ## Non-goals
@@ -57,8 +57,24 @@ cargo fmt --all -- --check
 # Run clippy with warnings as errors
 cargo clippy --workspace --all-targets -- -D warnings
 
-# Run the development helper
+# Check documentation
+cargo doc --workspace --no-deps --document-private-items
+
+# Run the development helper (fmt + clippy + doc + test)
 cargo xtask ci
+```
+
+## Running examples
+
+```bash
+# UDP echo server
+cargo run --package masque --example udp_echo_server -- 127.0.0.1:3456
+
+# UDP echo client
+cargo run --package masque --example udp_echo_client -- 127.0.0.1:3456 "hello"
+
+# CONNECT-UDP proxy stub
+cargo run --package masque --example connect_udp_proxy -- 0.0.0.0:8443 127.0.0.1:53
 ```
 
 ## Roadmap

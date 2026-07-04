@@ -31,6 +31,13 @@ impl fmt::Display for Protocol {
 /// This type will eventually hold connection state, negotiated parameters,
 /// and flow identifiers. For now it serves as a structural placeholder while
 /// the crate's public API is being designed.
+///
+/// # Design note
+///
+/// Future state additions should be grouped into cohesive inner types
+/// (e.g., transport state, flow identifiers, negotiated caps) rather than
+/// appended as unrelated fields. Consider wrapping a private inner struct so
+/// that internal growth does not break the public API.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
     protocol: Protocol,
@@ -65,5 +72,17 @@ mod tests {
     fn session_stores_protocol() {
         let session = Session::new(Protocol::ConnectUdp);
         assert_eq!(session.protocol(), Protocol::ConnectUdp);
+    }
+
+    #[test]
+    fn session_stores_all_protocol_variants() {
+        for protocol in [
+            Protocol::ConnectUdp,
+            Protocol::ConnectIp,
+            Protocol::ConnectEthernet,
+        ] {
+            let session = Session::new(protocol);
+            assert_eq!(session.protocol(), protocol);
+        }
     }
 }

@@ -6,33 +6,32 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-      - name: Run clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-  test:
-    name: Test
+  ci:
+    name: CI (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+      - name: Check formatting
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo fmt --all -- --check
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Check documentation
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo doc --workspace --no-deps --document-private-items --locked
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
