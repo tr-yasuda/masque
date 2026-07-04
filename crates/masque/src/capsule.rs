@@ -223,6 +223,11 @@ pub const DEFAULT_MAX_CAPSULE_LENGTH: usize = 65_536;
 /// method returns `Ok(Some(Capsule))`. If more bytes are needed it returns
 /// `Ok(None)`.
 ///
+/// Note that the parser still buffers one complete capsule value before
+/// yielding it, because [`Capsule`] stores the value as a [`Vec<u8>`]. The
+/// streaming improvement is avoiding buffering the *entire* byte stream, not
+/// avoiding buffering an individual capsule value.
+///
 /// The default maximum accepted capsule value length is
 /// [`DEFAULT_MAX_CAPSULE_LENGTH`]. Use [`CapsuleParser::with_max_length`] to
 /// configure a different limit. `Clone` performs a deep copy of the internal
