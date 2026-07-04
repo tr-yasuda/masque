@@ -156,6 +156,12 @@ fn encode_to_array(value: u64) -> (usize, [u8; 8]) {
 /// assert_eq!(consumed, 2);
 /// ```
 pub fn decode(buf: &[u8]) -> Result<(u64, usize)> {
+    if buf.is_empty() {
+        return Err(Error::InvalidVarInt {
+            kind: VarIntErrorKind::EmptyBuffer,
+            message: "empty buffer".into(),
+        });
+    }
     decode_at(buf, 0)
 }
 
@@ -180,7 +186,7 @@ pub fn decode(buf: &[u8]) -> Result<(u64, usize)> {
 /// assert_eq!(consumed, 2);
 /// ```
 pub fn decode_at(buf: &[u8], offset: usize) -> Result<(u64, usize)> {
-    if buf.is_empty() {
+    if buf.is_empty() && offset == 0 {
         return Err(Error::InvalidVarInt {
             kind: VarIntErrorKind::EmptyBuffer,
             message: "empty buffer".into(),
@@ -465,6 +471,19 @@ mod tests {
     #[test]
     fn decode_at_rejects_offset_equal_to_buffer_length() {
         let err = decode_at(&[0x40, 0x40], 2).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidVarInt {
+                kind: VarIntErrorKind::OffsetOutOfBounds,
+                ..
+            }
+        ));
+        assert!(err.to_string().contains("offset out of bounds"));
+    }
+
+    #[test]
+    fn decode_at_rejects_out_of_bounds_offset_on_empty_buffer() {
+        let err = decode_at(&[], 5).unwrap_err();
         assert!(matches!(
             err,
             Error::InvalidVarInt {

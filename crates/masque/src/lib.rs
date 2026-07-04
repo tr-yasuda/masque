@@ -26,7 +26,9 @@ pub mod settings;
 pub mod types;
 
 pub use capsule::{Capsule, CapsuleType};
-pub use capsule_protocol::{CAPSULE_PROTOCOL, parse_capsule_protocol, serialize_capsule_protocol};
+pub use capsule_protocol::{
+    CAPSULE_PROTOCOL, CapsuleProtocolError, parse_capsule_protocol, serialize_capsule_protocol,
+};
 pub use config::Config;
 pub use datagram::{DatagramPayload, HttpDatagram, MAX_QUARTER_STREAM_ID};
 pub use error::{Error, H3_DATAGRAM_ERROR_CODE, H3DatagramErrorKind, Result, VarIntErrorKind};

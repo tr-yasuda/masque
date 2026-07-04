@@ -68,14 +68,18 @@ pub enum Error {
     /// Per RFC 9297 Sections 2.1 and 3.3, this is an HTTP/3 connection or stream
     /// error; callers that produce this error must abort the affected request
     /// stream or terminate the connection.
+    ///
+    /// The `message` field uses [`H3DatagramErrorMessage`], which can only be
+    /// constructed inside this crate. This ensures that the message is always
+    /// generated internally and never contains raw peer-supplied data.
     H3DatagramError {
         /// The kind of datagram or capsule error.
         kind: H3DatagramErrorKind,
         /// A human-readable description of what is wrong.
         ///
-        /// This message must be generated internally and must not contain raw
+        /// This message is always generated internally and never contains raw
         /// peer-supplied data, because it may be logged or returned to callers.
-        message: String,
+        message: H3DatagramErrorMessage,
         /// The underlying error that caused this datagram parse error, if any.
         ///
         /// This allows callers and operators to inspect the root cause (for
@@ -118,6 +122,46 @@ pub enum H3DatagramErrorKind {
     Truncated,
 }
 
+/// A human-readable message for [`Error::H3DatagramError`].
+///
+/// This newtype is intentionally constructible only inside the `masque` crate,
+/// ensuring that the message is always generated internally and never contains
+/// raw peer-supplied data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct H3DatagramErrorMessage(String);
+
+impl H3DatagramErrorMessage {
+    /// Create a new internally-generated error message.
+    pub(crate) fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
+impl Error {
+    /// Create an [`Error::H3DatagramError`] with an internally-generated message.
+    pub(crate) fn h3_datagram_error(kind: H3DatagramErrorKind, message: impl Into<String>) -> Self {
+        Self::H3DatagramError {
+            kind,
+            message: H3DatagramErrorMessage::new(message),
+            source: None,
+        }
+    }
+
+    /// Create an [`Error::H3DatagramError`] with an internally-generated message
+    /// and an optional underlying source error.
+    pub(crate) fn h3_datagram_error_with_source(
+        kind: H3DatagramErrorKind,
+        message: impl Into<String>,
+        source: Error,
+    ) -> Self {
+        Self::H3DatagramError {
+            kind,
+            message: H3DatagramErrorMessage::new(message),
+            source: Some(Box::new(source)),
+        }
+    }
+}
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -142,7 +186,8 @@ impl fmt::Display for Error {
             ),
             Error::H3DatagramError { message, .. } => write!(
                 f,
-                "HTTP/3 datagram or capsule protocol error ({H3_DATAGRAM_ERROR_CODE:#x}): {message}"
+                "HTTP/3 datagram or capsule protocol error ({H3_DATAGRAM_ERROR_CODE:#x}): {}",
+                message.0
             ),
         }
     }
@@ -187,11 +232,7 @@ mod tests {
 
     #[test]
     fn h3_datagram_error_display_includes_message() {
-        let err = Error::H3DatagramError {
-            kind: H3DatagramErrorKind::Generic,
-            message: "invalid datagram length".into(),
-            source: None,
-        };
+        let err = Error::h3_datagram_error(H3DatagramErrorKind::Generic, "invalid datagram length");
         assert_eq!(
             err.to_string(),
             "HTTP/3 datagram or capsule protocol error (0x33): invalid datagram length"
@@ -204,42 +245,26 @@ mod tests {
             kind: VarIntErrorKind::BufferTooShort,
             message: "buffer too short".into(),
         };
-        let err = Error::H3DatagramError {
-            kind: H3DatagramErrorKind::InvalidVarint,
-            message: "invalid quarter stream ID".into(),
-            source: Some(Box::new(inner.clone())),
-        };
+        let err = Error::h3_datagram_error_with_source(
+            H3DatagramErrorKind::InvalidVarint,
+            "invalid quarter stream ID",
+            inner.clone(),
+        );
         assert_eq!(err.source().map(|e| e.to_string()), Some(inner.to_string()));
     }
 
     #[test]
     fn h3_datagram_error_is_cloneable() {
-        let err = Error::H3DatagramError {
-            kind: H3DatagramErrorKind::Generic,
-            message: "parse failed".into(),
-            source: None,
-        };
+        let err = Error::h3_datagram_error(H3DatagramErrorKind::Generic, "parse failed");
         let cloned = err.clone();
         assert_eq!(err, cloned);
     }
 
     #[test]
     fn h3_datagram_error_is_equal() {
-        let err = Error::H3DatagramError {
-            kind: H3DatagramErrorKind::Generic,
-            message: "parse failed".into(),
-            source: None,
-        };
-        let same = Error::H3DatagramError {
-            kind: H3DatagramErrorKind::Generic,
-            message: "parse failed".into(),
-            source: None,
-        };
-        let different = Error::H3DatagramError {
-            kind: H3DatagramErrorKind::Generic,
-            message: "other".into(),
-            source: None,
-        };
+        let err = Error::h3_datagram_error(H3DatagramErrorKind::Generic, "parse failed");
+        let same = Error::h3_datagram_error(H3DatagramErrorKind::Generic, "parse failed");
+        let different = Error::h3_datagram_error(H3DatagramErrorKind::Generic, "other");
         assert_eq!(err, same);
         assert_ne!(err, different);
     }
@@ -263,10 +288,10 @@ mod tests {
                 previous: 1,
                 received: 0,
             },
-            Error::H3DatagramError {
-                kind: H3DatagramErrorKind::Generic,
-                message: "parse failed".into(),
-                source: None,
+            Error::h3_datagram_error(H3DatagramErrorKind::Generic, "parse failed"),
+            Error::InvalidVarInt {
+                kind: VarIntErrorKind::ValueTooLarge,
+                message: "value too large".into(),
             },
         ];
         for err in errors {

@@ -14,6 +14,10 @@ use std::net::{SocketAddr, UdpSocket};
 use std::str::FromStr;
 use std::time::Duration;
 
+/// Buffer size large enough for the biggest standard IPv6 UDP payload (65 535
+/// bytes IPv6 payload length minus 8 byte UDP header).
+const MAX_UDP_PAYLOAD: usize = 65_527;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     let server_addr = args.get(1).map_or("127.0.0.1:3456", String::as_str);
@@ -34,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     socket.send(message.as_bytes())?;
     println!("Sent {} bytes to {}", message.len(), server_addr);
 
-    let mut buf = vec![0u8; 65507];
+    let mut buf = vec![0u8; MAX_UDP_PAYLOAD];
     let n = socket.recv(&mut buf)?;
     let response = String::from_utf8_lossy(&buf[..n]);
     println!("Received: {}", response);
