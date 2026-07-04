@@ -69,6 +69,8 @@ pub enum Error {
     /// error; callers that produce this error must abort the affected request
     /// stream or terminate the connection.
     H3DatagramError {
+        /// The kind of datagram or capsule error.
+        kind: H3DatagramErrorKind,
         /// A human-readable description of what is wrong.
         ///
         /// This message must be generated internally and must not contain raw
@@ -89,6 +91,22 @@ pub enum VarIntErrorKind {
     OffsetOutOfBounds,
     /// The value exceeds the maximum representable varint.
     ValueTooLarge,
+}
+
+/// The kind of HTTP/3 datagram or Capsule Protocol error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum H3DatagramErrorKind {
+    /// A generic error not covered by a more specific kind.
+    Generic,
+    /// A QUIC variable-length integer value was out of range.
+    VarintOutOfRange,
+    /// The capsule length does not fit in a platform `usize`.
+    LengthTooLarge,
+    /// The capsule header or value length overflows the buffer offset.
+    LengthOverflow,
+    /// The capsule value was truncated.
+    Truncated,
 }
 
 impl fmt::Display for Error {
@@ -113,7 +131,7 @@ impl fmt::Display for Error {
                 f,
                 "HTTP/3 setting {setting:#x} already negotiated with value {previous}; received conflicting value {received}"
             ),
-            Error::H3DatagramError { message } => write!(
+            Error::H3DatagramError { message, .. } => write!(
                 f,
                 "HTTP/3 datagram or capsule protocol error ({H3_DATAGRAM_ERROR_CODE:#x}): {message}"
             ),
@@ -150,6 +168,7 @@ mod tests {
     #[test]
     fn h3_datagram_error_display_includes_message() {
         let err = Error::H3DatagramError {
+            kind: H3DatagramErrorKind::Generic,
             message: "invalid datagram length".into(),
         };
         assert_eq!(
@@ -161,6 +180,7 @@ mod tests {
     #[test]
     fn h3_datagram_error_is_cloneable() {
         let err = Error::H3DatagramError {
+            kind: H3DatagramErrorKind::Generic,
             message: "parse failed".into(),
         };
         let cloned = err.clone();
@@ -170,12 +190,15 @@ mod tests {
     #[test]
     fn h3_datagram_error_is_equal() {
         let err = Error::H3DatagramError {
+            kind: H3DatagramErrorKind::Generic,
             message: "parse failed".into(),
         };
         let same = Error::H3DatagramError {
+            kind: H3DatagramErrorKind::Generic,
             message: "parse failed".into(),
         };
         let different = Error::H3DatagramError {
+            kind: H3DatagramErrorKind::Generic,
             message: "other".into(),
         };
         assert_eq!(err, same);
@@ -202,6 +225,7 @@ mod tests {
                 received: 0,
             },
             Error::H3DatagramError {
+                kind: H3DatagramErrorKind::Generic,
                 message: "parse failed".into(),
             },
         ];
