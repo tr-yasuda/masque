@@ -1,0 +1,13 @@
+[workspace]
+members = ["crates/masque", "xtask"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.1"
+authors = ["MASQUE Contributors"]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/yourusername/masque"
+rust-version = "1.85"
+
+[workspace.dependencies]

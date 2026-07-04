@@ -1,0 +1,14 @@
+[package]
+name = "masque"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "A Rust library for MASQUE protocols (CONNECT-UDP, CONNECT-IP, CONNECT-Ethernet)."
+readme = "../../README.md"
+
+[dependencies]
+
+[dev-dependencies]
