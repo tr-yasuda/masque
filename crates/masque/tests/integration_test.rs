@@ -11,9 +11,9 @@ use std::time::Duration;
 
 use masque::quic_varint::{self, MAX_VARINT};
 use masque::{
-    CAPSULE_PROTOCOL, Config, DatagramPayload, Error, H3DatagramSettingValue, HttpDatagram,
-    Protocol, SETTINGS_H3_DATAGRAM, Session, VarIntErrorKind, parse_capsule_protocol,
-    serialize_capsule_protocol, validate_h3_datagram_setting_value,
+    CAPSULE_PROTOCOL, Capsule, CapsuleType, Config, DatagramPayload, Error, H3DatagramErrorKind,
+    H3DatagramSettingValue, HttpDatagram, Protocol, SETTINGS_H3_DATAGRAM, Session, VarIntErrorKind,
+    parse_capsule_protocol, serialize_capsule_protocol, validate_h3_datagram_setting_value,
 };
 
 #[test]
@@ -77,6 +77,7 @@ fn not_implemented_error_can_be_created() {
 #[test]
 fn h3_datagram_error_can_be_created() {
     let err = Error::H3DatagramError {
+        kind: H3DatagramErrorKind::Generic,
         message: "invalid datagram length".into(),
     };
     assert_eq!(
@@ -105,6 +106,7 @@ fn error_variants_are_cloneable() {
             received: 0,
         },
         Error::H3DatagramError {
+            kind: H3DatagramErrorKind::Generic,
             message: "parse failed".into(),
         },
     ];
@@ -425,6 +427,71 @@ fn capsule_protocol_parses_and_serializes_at_crate_root() {
             Some(value)
         );
     }
+}
+
+#[test]
+fn capsule_type_datagram_value_is_zero_from_public_api() {
+    assert_eq!(CapsuleType::DATAGRAM.value(), 0);
+    assert!(CapsuleType::DATAGRAM.is_datagram());
+    assert!(!CapsuleType::DATAGRAM.is_unknown());
+    assert_eq!(CapsuleType::new(0).unwrap(), CapsuleType::DATAGRAM);
+}
+
+#[test]
+fn capsule_type_rejects_out_of_range_value_from_public_api() {
+    use masque::quic_varint::MAX_VARINT;
+    let err = CapsuleType::new(MAX_VARINT + 1).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::H3DatagramError {
+            kind: H3DatagramErrorKind::VarintOutOfRange,
+            ..
+        }
+    ));
+    assert!(err.to_string().contains("capsule type"));
+}
+
+#[test]
+fn capsule_round_trips_known_and_unknown_types_from_public_api() {
+    let known = Capsule::new(CapsuleType::DATAGRAM, vec![0x01, 0x02]).unwrap();
+    let encoded = known.encode().unwrap();
+    let (decoded, consumed) = Capsule::decode(&encoded).unwrap();
+    assert_eq!(consumed, encoded.len());
+    assert_eq!(decoded.capsule_type(), CapsuleType::DATAGRAM);
+    assert_eq!(decoded.value(), &[0x01, 0x02]);
+
+    let unknown = Capsule::new(CapsuleType::new(0x2bad).unwrap(), vec![0xab]).unwrap();
+    let encoded = unknown.encode().unwrap();
+    let (decoded, consumed) = Capsule::decode(&encoded).unwrap();
+    assert_eq!(consumed, encoded.len());
+    assert_eq!(decoded.capsule_type().value(), 0x2bad);
+    assert!(decoded.capsule_type().is_unknown());
+}
+
+#[test]
+fn capsule_decode_rejects_truncated_value_from_public_api() {
+    let encoded = [0x00, 0x05, 0x01, 0x02];
+    let err = Capsule::decode(&encoded).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::H3DatagramError {
+            kind: H3DatagramErrorKind::Truncated,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn capsule_decode_wraps_invalid_varint_header_in_h3_datagram_error_from_public_api() {
+    let err = Capsule::decode(&[0xc0]).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::H3DatagramError {
+            kind: H3DatagramErrorKind::InvalidVarint,
+            ..
+        }
+    ));
+    assert!(err.to_string().contains("malformed capsule varint"));
 }
 
 #[test]

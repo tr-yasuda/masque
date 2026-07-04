@@ -1,6 +1,6 @@
 //! HTTP Datagram payload types per RFC 9297.
 
-use crate::{Error, Result};
+use crate::{Error, H3DatagramErrorKind, Result};
 
 /// The largest stream ID allowed by QUIC (RFC 9000 Section 2.1).
 const MAX_QUIC_STREAM_ID: u64 = (1 << 62) - 1;
@@ -77,11 +77,13 @@ impl HttpDatagram {
     fn validate_stream_id(stream_id: u64) -> Result<()> {
         if stream_id > MAX_QUIC_STREAM_ID {
             return Err(Error::H3DatagramError {
+                kind: H3DatagramErrorKind::Generic,
                 message: "stream ID exceeds the maximum QUIC stream ID".into(),
             });
         }
         if stream_id % 4 != 0 {
             return Err(Error::H3DatagramError {
+                kind: H3DatagramErrorKind::Generic,
                 message: "stream ID is not a client-initiated bidirectional stream ID".into(),
             });
         }
@@ -230,6 +232,7 @@ mod tests {
 
         fn decode(_payload: &[u8]) -> std::result::Result<Self, Self::Error> {
             Err(Error::H3DatagramError {
+                kind: H3DatagramErrorKind::Generic,
                 message: "malformed payload".into(),
             })
         }
