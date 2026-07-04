@@ -97,7 +97,9 @@ impl fmt::Display for Error {
             Error::InvalidConfig { field, message } => {
                 write!(f, "invalid configuration for {field}: {message}")
             }
-            Error::InvalidVarInt { kind, message } => write!(f, "invalid varint ({kind:?}): {message}"),
+            Error::InvalidVarInt { kind, message } => {
+                write!(f, "invalid varint ({kind:?}): {message}")
+            }
             Error::NotImplemented { message } => write!(f, "not implemented: {message}"),
             Error::H3DatagramSetting { setting, value } => write!(
                 f,

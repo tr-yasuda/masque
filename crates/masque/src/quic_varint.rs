@@ -99,10 +99,12 @@ pub fn encode_into(value: u64, buf: &mut [u8]) -> Result<usize> {
 pub fn encode_into_at(value: u64, buf: &mut [u8], offset: usize) -> Result<usize> {
     ensure_valid(value)?;
     let (len, encoded) = encode_to_array(value);
-    let end = offset.checked_add(len).ok_or_else(|| Error::InvalidVarInt {
-        kind: VarIntErrorKind::OffsetOutOfBounds,
-        message: "offset overflow".into(),
-    })?;
+    let end = offset
+        .checked_add(len)
+        .ok_or_else(|| Error::InvalidVarInt {
+            kind: VarIntErrorKind::OffsetOutOfBounds,
+            message: "offset overflow".into(),
+        })?;
     if buf.len() < end {
         return Err(Error::InvalidVarInt {
             kind: VarIntErrorKind::BufferTooShort,
