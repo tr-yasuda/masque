@@ -19,14 +19,15 @@ pub const CAPSULE_PROTOCOL: &str = "Capsule-Protocol";
 #[must_use]
 pub fn parse_capsule_protocol(value: &str) -> Option<bool> {
     let value = trim_ows(value);
-    if value.len() < 2 || value.as_bytes()[0] != b'?' {
+    let bytes = value.as_bytes();
+    if bytes.len() < 2 || bytes[0] != b'?' {
         return None;
     }
 
-    let rest = &value[2..];
-    match value.as_bytes()[1] {
-        b'1' if rest.is_empty() || rest.starts_with(';') => Some(true),
-        b'0' if rest.is_empty() || rest.starts_with(';') => Some(false),
+    let rest = &bytes[2..];
+    match bytes[1] {
+        b'1' if rest.is_empty() || rest.starts_with(b";") => Some(true),
+        b'0' if rest.is_empty() || rest.starts_with(b";") => Some(false),
         _ => None,
     }
 }
@@ -87,6 +88,9 @@ mod tests {
         assert_eq!(parse_capsule_protocol("1"), None);
         assert_eq!(parse_capsule_protocol("?2"), None);
         assert_eq!(parse_capsule_protocol("?1foo"), None);
+        // Non-ASCII after `?` must not panic on a char boundary.
+        assert_eq!(parse_capsule_protocol("?é"), None);
+        assert_eq!(parse_capsule_protocol(" ?é "), None);
     }
 
     #[test]
