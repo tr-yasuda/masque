@@ -16,11 +16,14 @@ RFC 9297 (and RFC 9000 QUIC) use variable-length integers for fields such as Cap
 
 - Add a `quic_varint` module with:
   - `pub fn encode(value: u64) -> Vec<u8>`
+  - `pub fn try_encode(value: u64) -> Result<Vec<u8>, Error>`
+  - `pub fn encode_into(value: u64, buf: &mut [u8]) -> Result<usize, Error>`
   - `pub fn decode(buf: &[u8]) -> Result<(u64, usize), Error>`
+  - `pub fn decode_at(buf: &[u8], offset: usize) -> Result<(u64, usize), Error>`
 - Support 1-, 2-, 4-, and 8-byte encodings as defined in RFC 9000 Section 16.
 - Reject values larger than `2^62 - 1`.
 - Reject buffers that are too short to parse.
-- Add unit tests covering boundary values, short buffers, and oversized values.
+- Add unit and integration tests covering boundary values, short buffers, oversized values, and RFC 9000 example vectors.
 - Ensure `cargo clippy` and `cargo doc` pass with warnings treated as errors.
 
 ## Architecture
@@ -29,9 +32,10 @@ RFC 9297 (and RFC 9000 QUIC) use variable-length integers for fields such as Cap
 
 | File | Change |
 |---|---|
-| `crates/masque/src/quic_varint.rs` | New module implementing `encode` and `decode`. |
-| `crates/masque/src/lib.rs` | Add `pub mod quic_varint;` and re-export public items if appropriate. |
-| `crates/masque/src/error.rs` | Add `Error::InvalidVarInt { message: String }` variant. |
+| `crates/masque/src/quic_varint.rs` | New module implementing `encode`, `try_encode`, `encode_into`, `decode`, and `decode_at`. |
+| `crates/masque/src/lib.rs` | Add `pub mod quic_varint;` and re-export `VarIntErrorKind`. |
+| `crates/masque/src/error.rs` | Add `Error::InvalidVarInt { kind: VarIntErrorKind, message: String }` and the `VarIntErrorKind` enum. |
+| `crates/masque/tests/integration_test.rs` | Add integration tests for the public varint API. |
 
 ### Encoding rules
 
@@ -51,9 +55,17 @@ RFC 9297 (and RFC 9000 QUIC) use variable-length integers for fields such as Cap
 4. Reconstruct the integer by clearing the prefix bits and reading the remaining bytes as big-endian.
 5. Return `(value, bytes_consumed)`.
 
+Note: Per RFC 9000 Section 16, values do not need to be encoded on the minimum number of bytes necessary, except for the Frame Type field. The decoder therefore accepts overlong encodings.
+
 ### Error handling
 
-A new `Error::InvalidVarInt { message: String }` variant is added to the crate's `Error` enum. This keeps error handling consistent with the existing `InvalidConfig` and `NotImplemented` variants.
+A new `Error::InvalidVarInt { kind: VarIntErrorKind, message: String }` variant is added to the crate's `Error` enum. The `kind` field allows callers to distinguish failure modes programmatically, while `message` provides a human-readable description.
+
+`VarIntErrorKind` variants:
+
+- `EmptyBuffer`
+- `BufferTooShort`
+- `ValueTooLarge`
 
 `Display` implementation:
 
@@ -63,7 +75,7 @@ invalid varint: {message}
 
 ### Testing
 
-Unit tests live in `quic_varint.rs` under `#[cfg(test)] mod tests`.
+Unit tests live in `quic_varint.rs` under `#[cfg(test)] mod tests`. Broader behavior tests live in `crates/masque/tests/integration_test.rs`.
 
 Test cases:
 
@@ -76,9 +88,14 @@ Test cases:
   - `1_073_741_823`
   - `1_073_741_824`
   - `4_611_686_018_427_387_903` (`2^62 - 1`)
-- Encode rejects values `>= 2^62`.
+- `try_encode` rejects values `>= 2^62`.
+- `encode_into` writes expected bytes and rejects short buffers.
+- `decode_at` reads from an offset and rejects out-of-bounds offsets.
 - Decode rejects empty buffers.
 - Decode rejects buffers shorter than the indicated length for each encoding size.
+- Decode accepts overlong encodings (permitted by RFC 9000 Section 16 except for Frame Type).
+- Decode ignores trailing bytes.
+- Decode accepts the RFC 9000 example vectors.
 
 ## Dependencies
 

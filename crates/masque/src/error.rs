@@ -40,8 +40,6 @@ pub enum VarIntErrorKind {
     EmptyBuffer,
     /// The buffer was too short to contain the encoded integer.
     BufferTooShort,
-    /// The encoding was not the shortest possible form.
-    NonCanonical,
     /// The value exceeds the maximum representable varint.
     ValueTooLarge,
 }

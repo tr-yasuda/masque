@@ -25,7 +25,8 @@ pub const MAX_VARINT: u64 = 4_611_686_018_427_387_903; // 2^62 - 1
 /// ```
 pub fn encode(value: u64) -> Vec<u8> {
     assert!(value <= MAX_VARINT, "value exceeds 2^62 - 1");
-    encode_unchecked(value)
+    let (len, encoded) = encode_to_array(value);
+    encoded[..len].to_vec()
 }
 
 /// Encodes a value as a QUIC variable-length integer, returning an error if the
@@ -48,14 +49,16 @@ pub fn try_encode(value: u64) -> Result<Vec<u8>> {
             message: format!("value {value} exceeds 2^62 - 1"),
         });
     }
-    Ok(encode_unchecked(value))
+    let (len, encoded) = encode_to_array(value);
+    Ok(encoded[..len].to_vec())
 }
 
 /// Encodes `value` into the provided buffer and returns the number of bytes
 /// written.
 ///
-/// The buffer must be at least 1 byte long. The maximum possible encoded
-/// length is 8 bytes, so a `[u8; 8]` is sufficient for any valid value.
+/// This function does not allocate. The buffer must be at least 1 byte long;
+/// the maximum possible encoded length is 8 bytes, so a `[u8; 8]` is sufficient
+/// for any valid value.
 ///
 /// # Errors
 ///
@@ -78,28 +81,28 @@ pub fn encode_into(value: u64, buf: &mut [u8]) -> Result<usize> {
             message: format!("value {value} exceeds 2^62 - 1"),
         });
     }
-    let encoded = encode_unchecked(value);
-    if buf.len() < encoded.len() {
+    let (len, encoded) = encode_to_array(value);
+    if buf.len() < len {
         return Err(Error::InvalidVarInt {
             kind: VarIntErrorKind::BufferTooShort,
             message: "output buffer too short".into(),
         });
     }
-    buf[..encoded.len()].copy_from_slice(&encoded);
-    Ok(encoded.len())
+    buf[..len].copy_from_slice(&encoded[..len]);
+    Ok(len)
 }
 
-fn encode_unchecked(value: u64) -> Vec<u8> {
+fn encode_to_array(value: u64) -> (usize, [u8; 8]) {
     if value <= 0x3f {
-        vec![value as u8]
+        (1, [value as u8, 0, 0, 0, 0, 0, 0, 0])
     } else if value <= 0x3fff {
-        // `u64::to_be_bytes()` returns 8 bytes; take the trailing 2 bytes.
-        (value | 0x4000).to_be_bytes()[6..].to_vec()
+        // Shift the 2-byte value into the most-significant bytes so that
+        // `to_be_bytes()` produces a left-aligned `[u8; 8]`.
+        (2, ((value | 0x4000) << 48).to_be_bytes())
     } else if value <= 0x3fffffff {
-        // `u64::to_be_bytes()` returns 8 bytes; take the trailing 4 bytes.
-        (value | 0x80000000).to_be_bytes()[4..].to_vec()
+        (4, ((value | 0x80000000) << 32).to_be_bytes())
     } else {
-        (value | 0xc000000000000000).to_be_bytes().to_vec()
+        (8, (value | 0xc000000000000000).to_be_bytes())
     }
 }
 
@@ -180,21 +183,6 @@ fn decode_inner(buf: &[u8]) -> Result<(u64, usize)> {
     let mut bytes = [0u8; 8];
     bytes[8 - len..].copy_from_slice(&buf[..len]);
     let value = u64::from_be_bytes(bytes) & mask;
-
-    let min_value_for_len = match len {
-        // The 1-byte form covers 0..=0x3f, so any value it produces is valid.
-        1 => 0,
-        2 => 0x40,
-        4 => 0x4000,
-        8 => 0x40000000,
-        _ => unreachable!(),
-    };
-    if value < min_value_for_len {
-        return Err(Error::InvalidVarInt {
-            kind: VarIntErrorKind::NonCanonical,
-            message: "non-canonical encoding".into(),
-        });
-    }
 
     Ok((value, len))
 }
@@ -368,42 +356,15 @@ mod tests {
     }
 
     #[test]
-    fn decode_rejects_non_canonical_two_byte_form() {
-        let err = decode(&[0x40, 0x05]).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::InvalidVarInt {
-                kind: VarIntErrorKind::NonCanonical,
-                ..
-            }
-        ));
-        assert_eq!(err.to_string(), "invalid varint: non-canonical encoding");
-    }
-
-    #[test]
-    fn decode_rejects_non_canonical_four_byte_form() {
-        let err = decode(&[0x80, 0x00, 0x00, 0x05]).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::InvalidVarInt {
-                kind: VarIntErrorKind::NonCanonical,
-                ..
-            }
-        ));
-        assert_eq!(err.to_string(), "invalid varint: non-canonical encoding");
-    }
-
-    #[test]
-    fn decode_rejects_non_canonical_eight_byte_form() {
-        let err = decode(&[0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05]).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::InvalidVarInt {
-                kind: VarIntErrorKind::NonCanonical,
-                ..
-            }
-        ));
-        assert_eq!(err.to_string(), "invalid varint: non-canonical encoding");
+    fn decode_accepts_overlong_encodings() {
+        // RFC 9000 Section 16 allows values to be encoded with more bytes than
+        // necessary, except for the Frame Type field.
+        assert_eq!(decode(&[0x40, 0x05]).unwrap(), (5, 2));
+        assert_eq!(decode(&[0x80, 0x00, 0x00, 0x05]).unwrap(), (5, 4));
+        assert_eq!(
+            decode(&[0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05]).unwrap(),
+            (5, 8)
+        );
     }
 
     #[test]

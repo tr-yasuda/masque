@@ -128,15 +128,20 @@ fn quic_varint_decode_rejects_invalid_input() {
             ..
         }
     ));
+}
 
-    let err = quic_varint::decode(&[0x40, 0x05]).unwrap_err();
-    assert!(matches!(
-        err,
-        Error::InvalidVarInt {
-            kind: VarIntErrorKind::NonCanonical,
-            ..
-        }
-    ));
+#[test]
+fn quic_varint_decode_accepts_overlong_encodings() {
+    // RFC 9000 Section 16 allows overlong encodings except for Frame Type.
+    assert_eq!(quic_varint::decode(&[0x40, 0x05]).unwrap(), (5, 2));
+    assert_eq!(
+        quic_varint::decode(&[0x80, 0x00, 0x00, 0x05]).unwrap(),
+        (5, 4)
+    );
+    assert_eq!(
+        quic_varint::decode(&[0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x05]).unwrap(),
+        (5, 8)
+    );
 }
 
 #[test]
