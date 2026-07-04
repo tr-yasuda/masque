@@ -145,6 +145,18 @@ learning. The CONNECT-UDP proxy is a placeholder with TODOs.
 - Match the existing comment style: module-level doc comments, doc comments on
   public items, and inline comments only when they add non-obvious information.
 
+## Communication guidelines
+
+All project communication in GitHub is written in English. This keeps the
+project accessible to a global audience and avoids ambiguity in technical
+discussions.
+
+- Write PR titles, descriptions, and review comments in English.
+- Write issue comments and GitHub Discussions in English.
+- Write code comments, doc comments, commit messages, and documentation in
+  English.
+- Avoid mixing languages, even when the original author used another language.
+
 ## Testing instructions
 
 The test suite is split across three locations:
