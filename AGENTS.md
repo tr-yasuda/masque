@@ -159,10 +159,18 @@ All project communication in GitHub is written in English. This keeps the
 project accessible to a global audience and avoids ambiguity in technical
 discussions.
 
-- Write PR titles, descriptions, and review comments in English.
+**Language guardrail:** Before generating any text that will be posted to
+GitHub — including PR titles, PR descriptions, review comments, review replies,
+issue comments, and discussion posts — switch to English. Do not post in
+Japanese or any other language, even if the reviewer or issue author used
+another language.
+
+- Write PR titles, descriptions, and review comments/replies in English.
 - Write issue comments and GitHub Discussions in English.
 - Write code comments, doc comments, commit messages, and documentation in
   English.
+- Conversational replies to the local user may use the user's language, but any
+  artifact that is committed or posted to GitHub must be in English.
 - Avoid mixing languages, even when the original author used another language.
 
 ## Testing instructions
