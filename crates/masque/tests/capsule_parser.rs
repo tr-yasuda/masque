@@ -213,5 +213,10 @@ fn capsule_stream_accepts_exactly_custom_max_length() {
         }
     }
 
+    while let Some(capsule) = parser.next_capsule().unwrap() {
+        parsed.push(capsule);
+    }
+    parser.finalize().unwrap();
+
     assert_eq!(parsed, vec![capsule]);
 }
