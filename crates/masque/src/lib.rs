@@ -3,9 +3,19 @@
 //! A Rust library for implementing and experimenting with MASQUE protocols,
 //! starting with CONNECT-UDP over HTTP/3.
 //!
-//! This crate is intentionally small at the moment. It provides the initial
-//! types, errors, configuration primitives, and a `Capsule-Protocol` header
-//! helper that future protocol logic will build on.
+//! This crate provides the building blocks for MASQUE tunneling, including
+//! HTTP/3 Datagram support and the Capsule Protocol as defined in RFC 9297:
+//!
+//! - [`HttpDatagram`] for HTTP/3 Datagram payloads (Quarter Stream ID + opaque
+//!   payload) and their encoding/decoding.
+//! - [`DatagramCapsule`] for carrying datagram payloads over request streams.
+//! - [`Capsule`] and [`CapsuleParser`] for the Capsule Protocol message format.
+//! - [`CAPSULE_PROTOCOL`], [`parse_capsule_protocol`], and
+//!   [`serialize_capsule_protocol`] for the `Capsule-Protocol` header.
+//! - [`H3DatagramSettingValue`], [`SETTINGS_H3_DATAGRAM`], and [`Session`] for
+//!   negotiating and tracking HTTP/3 Datagram support.
+//!
+//! Higher-level CONNECT-UDP logic will be built on top of these primitives.
 //!
 //! ## Current status
 //!

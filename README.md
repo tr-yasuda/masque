@@ -14,14 +14,14 @@ The long-term vision is to grow the `masque` crate into a reusable library for M
 |----------|--------|-------|
 | [RFC 9000](https://datatracker.ietf.org/doc/html/rfc9000) QUIC | planned | Transport foundation; we will use an existing crate. |
 | [RFC 9114](https://datatracker.ietf.org/doc/html/rfc9114) HTTP/3 | planned | Used for CONNECT method semantics over QUIC. |
-| [RFC 9297](https://datatracker.ietf.org/doc/html/rfc9297) HTTP Datagrams | planned | Required for tunneling UDP payloads in HTTP/3. |
+| [RFC 9297](https://datatracker.ietf.org/doc/html/rfc9297) HTTP Datagrams | implemented | HTTP/3 Datagrams, DATAGRAM capsules, and `Capsule-Protocol` header support. |
 | [RFC 9298](https://datatracker.ietf.org/doc/html/rfc9298) CONNECT-UDP | in progress | Initial focus; stub example exists. |
 | CONNECT-IP draft | planned | Future work after CONNECT-UDP. |
 | CONNECT-Ethernet draft | planned | Future work after CONNECT-IP. |
 
 ## Current scope
 
-- A `masque` core library crate containing types, errors, configuration primitives, and a `Capsule-Protocol` header helper.
+- A `masque` core library crate containing types, errors, configuration primitives, and RFC 9297 building blocks (HTTP/3 Datagrams, DATAGRAM capsules, and the `Capsule-Protocol` header).
 - Plain UDP echo client/server examples for local testing.
 - A `connect_udp_proxy.rs` example stub with TODOs for the MASQUE-specific logic.
 - A minimal `xtask` helper to run fmt, clippy, doc, and tests.

@@ -1,4 +1,5 @@
-//! HTTP/3 settings used by MASQUE protocols.
+//! HTTP/3 settings used by MASQUE protocols, including `SETTINGS_H3_DATAGRAM`
+//! for negotiating HTTP/3 Datagram support (RFC 9297 Section 2.1.1).
 
 use crate::{Error, Result};
 
