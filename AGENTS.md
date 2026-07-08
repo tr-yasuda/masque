@@ -15,9 +15,10 @@ proxies. The first protocol target is CONNECT-UDP (RFC 9298) over HTTP/3
 (RFC 9000) rather than writing one from scratch.
 
 The project is intentionally in a scaffold / proof-of-concept phase. The core
-library currently exposes configuration primitives, error types, placeholder
-types for protocols and sessions, HTTP/3 settings helpers, and a
-`Capsule-Protocol` header helper.
+library exposes configuration primitives, error types, protocol/session types,
+HTTP/3 settings helpers, and RFC 9297 building blocks: HTTP/3 Datagram payload
+encoding/decoding, the Capsule Protocol parser, DATAGRAM capsule encoding/decoding,
+and the `Capsule-Protocol` header helper.
 Examples are plain UDP echo programs and a CONNECT-UDP proxy stub.
 
 Key facts:
@@ -40,9 +41,13 @@ masque/
 │       ├── Cargo.toml
 │       ├── src/
 │       │   ├── lib.rs              # Crate root; re-exports public API
+│       │   ├── capsule.rs          # Capsule Protocol message parser
 │       │   ├── capsule_protocol.rs # Capsule-Protocol header helper
 │       │   ├── config.rs           # Config validation and parsing
+│       │   ├── datagram.rs         # HTTP/3 Datagram payload types
+│       │   ├── datagram_capsule.rs # DATAGRAM capsule encoder/decoder
 │       │   ├── error.rs            # Error enum and Result type
+│       │   ├── quic_varint.rs      # QUIC variable-length integer helpers
 │       │   ├── settings.rs         # HTTP/3 settings constants and validation
 │       │   └── types.rs            # Protocol / Session types
 │       ├── tests/
@@ -68,11 +73,16 @@ masque/
 The main library. It currently has no external dependencies and is marked
 `publish = false`. Public modules:
 
+- `capsule` — Capsule Protocol message format, types, and streaming parser.
 - `capsule_protocol` — `Capsule-Protocol` header constant, parser, and
   serializer.
 - `config` — `Config` with validated `SocketAddr` bind/peer addresses.
-- `error` — `Error` enum (`InvalidConfig`, `NotImplemented`, `H3DatagramSetting`,
-  `H3SettingsConflict`, `H3DatagramError`) and `Result` alias.
+- `datagram` — HTTP/3 Datagram payload types and encoding/decoding.
+- `datagram_capsule` — DATAGRAM capsule encoder/decoder.
+- `error` — `Error` enum (`InvalidConfig`, `InvalidVarInt`, `NotImplemented`,
+  `H3DatagramSetting`, `H3SettingsConflict`, `H3DatagramError`) and `Result`
+  alias.
+- `quic_varint` — QUIC variable-length integer encoding and decoding.
 - `settings` — HTTP/3 setting constants such as `SETTINGS_H3_DATAGRAM`, the
   `H3DatagramSettingValue` newtype, and validation helpers.
 - `types` — `Protocol` enum (`ConnectUdp`, `ConnectIp`, `ConnectEthernet`) and
@@ -177,9 +187,10 @@ another language.
 
 The test suite is split across three locations:
 
-1. Unit tests in each source file (`config.rs`, `error.rs`, `types.rs`).
-2. Integration tests in `crates/masque/tests/integration_test.rs` that exercise
-   the public API and spawn example binaries (notably `udp_echo_server`).
+1. Unit tests in each source file (e.g., `config.rs`, `error.rs`, `types.rs`,
+   `datagram.rs`, `capsule.rs`).
+2. Integration tests in `crates/masque/tests/` that exercise the public API and
+   spawn example binaries (notably `udp_echo_server`).
 3. Unit tests in `xtask/src/main.rs` for the task-runner metadata.
 
 Run everything with:
