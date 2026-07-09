@@ -34,7 +34,7 @@ const HELP_TEXT: &str = concat!(
     "  doc         Run cargo doc --workspace --no-deps --document-private-items --locked (RUSTDOCFLAGS=-D warnings)\n",
     "  doc-h3      Run cargo doc --workspace --no-deps --document-private-items --features masque/h3 --locked (RUSTDOCFLAGS=-D warnings)\n",
     "  test        Run cargo test --workspace --locked\n",
-    "  test-h3     Run cargo test --workspace --features masque/h3 --locked\n",
+    "  test-h3     Run cargo test --workspace --features masque/h3,masque/test-utils --locked\n",
     "  help        Print this message\n",
 );
 
@@ -194,6 +194,7 @@ mod tests {
         assert!(HELP_TEXT.contains("test-h3"));
         assert!(HELP_TEXT.contains("--locked"));
         assert!(HELP_TEXT.contains("masque/h3"));
+        assert!(HELP_TEXT.contains("masque/test-utils"));
     }
 
     #[test]
