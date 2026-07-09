@@ -5,7 +5,9 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use masque::{H3Client, H3Server, dangerous_test_client_config, generate_self_signed_cert};
+use masque::{
+    H3_ALPN, H3Client, H3Server, dangerous_test_client_config, generate_self_signed_cert,
+};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -17,7 +19,7 @@ async fn h3_client_sends_request_and_receives_200() {
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .unwrap();
-    tls_config.alpn_protocols = vec![b"h3"[..].into()];
+    tls_config.alpn_protocols = vec![H3_ALPN[..].into()];
 
     let server_config = quinn::ServerConfig::with_crypto(std::sync::Arc::new(
         quinn::crypto::rustls::QuicServerConfig::try_from(tls_config).unwrap(),
@@ -49,7 +51,9 @@ async fn h3_client_sends_request_and_receives_200() {
         stream.send_response(response).await.unwrap();
         stream.finish().await.unwrap();
         let _ = shutdown_rx.await;
-        server.close();
+        // Keep the connection alive so the client observes a local H3_NO_ERROR
+        // close rather than a remote QUIC error when it shuts down.
+        std::future::pending::<()>().await;
     });
 
     let client_config = dangerous_test_client_config().unwrap();
@@ -80,14 +84,20 @@ async fn h3_client_sends_request_and_receives_200() {
     assert_eq!(response.status(), 200);
 
     shutdown_tx.send(()).unwrap();
-    // Close the client endpoint. The driver may return a transport error because
-    // the connection was closed, which is expected in this happy-path test.
-    let _ = tokio::time::timeout(TIMEOUT, client.close()).await;
 
-    tokio::time::timeout(TIMEOUT, server_task)
-        .await
-        .unwrap()
-        .unwrap();
+    // Close the client endpoint. After a graceful shutdown this must return Ok(()).
+    let close_result = tokio::time::timeout(TIMEOUT, client.close()).await.unwrap();
+    assert!(
+        close_result.is_ok(),
+        "H3Client::close() should return Ok(()) after graceful shutdown, got {:?}",
+        close_result
+    );
+
+    // Abort the server task so the endpoint and connection are dropped. Keeping
+    // the server connection alive until now lets the client close observe a
+    // local H3_NO_ERROR instead of a remote QUIC error.
+    server_task.abort();
+    let _ = server_task.await;
 }
 
 #[tokio::test]
@@ -98,7 +108,7 @@ async fn h3_server_accept_returns_none_after_close() {
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .unwrap();
-    tls_config.alpn_protocols = vec![b"h3"[..].into()];
+    tls_config.alpn_protocols = vec![H3_ALPN[..].into()];
 
     let server_config = quinn::ServerConfig::with_crypto(std::sync::Arc::new(
         quinn::crypto::rustls::QuicServerConfig::try_from(tls_config).unwrap(),
