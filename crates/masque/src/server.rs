@@ -111,8 +111,9 @@ impl H3Server {
     /// Close the underlying QUIC endpoint.
     ///
     /// Uses [`h3::error::Code::H3_NO_ERROR`] to signal a graceful HTTP/3 close.
-    /// Existing connections accepted before this call are not forcibly
-    /// terminated by this method.
+    /// This terminates all connections owned by the endpoint, including any
+    /// [`H3Connection`]s that were accepted before this call. Callers that need
+    /// to drain active requests should finish them before calling this method.
     ///
     /// Repeated calls are delegated to [`quinn::Endpoint::close`], which is
     /// idempotent.
