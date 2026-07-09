@@ -83,10 +83,14 @@ impl H3Client {
         // without polling the driver themselves.
         let driver_handle = tokio::spawn(async move {
             let result = std::future::poll_fn(|cx| driver.poll_close(cx)).await;
-            Err(Error::transport_error(
-                "HTTP/3 driver closed",
-                Some(Box::new(result)),
-            ))
+            if result.is_h3_no_error() {
+                Ok(())
+            } else {
+                Err(Error::transport_error(
+                    "HTTP/3 driver closed with error",
+                    Some(Box::new(result)),
+                ))
+            }
         });
 
         Ok(Self {
