@@ -32,9 +32,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Error` enum variants are no longer feature-gated: `Transport` and
   `InvalidCertificate` are always present so the enum shape does not depend on
   Cargo feature unification.
-
-### Changed
-
 - Store `Config` addresses as validated `SocketAddr` values with private fields and getters.
 - Structure `Error::InvalidConfig` with a `field` identifier and derive `Clone` for `Error`.
 - Move examples and integration tests under `crates/masque/` so Cargo discovers them.
