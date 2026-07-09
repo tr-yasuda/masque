@@ -63,13 +63,13 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 
 # Run clippy with the HTTP/3 feature
-cargo clippy --workspace --all-targets --features masque/h3 --locked -- -D warnings
+cargo clippy --workspace --all-targets --features masque/h3,masque/test-utils --locked -- -D warnings
 
 # Check documentation (fails on rustdoc warnings)
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --locked
 
 # Check documentation with the HTTP/3 feature
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --features masque/h3 --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --features masque/h3,masque/test-utils --locked
 
 # Run the development helper (fmt + clippy + doc + test, with and without h3)
 cargo xtask ci
@@ -104,3 +104,7 @@ cargo run --package masque --example connect_udp_proxy -- 127.0.0.1:8443 127.0.0
 ## License
 
 This project is licensed under the MIT License ([LICENSE](LICENSE)).
+
+[quinn]: https://crates.io/crates/quinn
+[h3]: https://crates.io/crates/h3
+[h3-quinn]: https://crates.io/crates/h3-quinn
