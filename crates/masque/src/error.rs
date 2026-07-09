@@ -1,6 +1,7 @@
 //! Error types for the `masque` crate.
 
 use std::fmt;
+use std::sync::Arc;
 
 /// A specialized [`Result`] type for `masque` operations.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -13,13 +14,35 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// namespaces and must not be used interchangeably.
 pub const H3_DATAGRAM_ERROR_CODE: u64 = 0x33;
 
+/// A classifier for [`Error::Transport`] that lets callers distinguish the
+/// phase of the transport stack where the failure occurred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TransportKind {
+    /// Creating a local QUIC endpoint failed.
+    EndpointCreation,
+    /// Initiating or accepting a QUIC connection failed.
+    Connect,
+    /// The QUIC handshake failed.
+    QuicHandshake,
+    /// The HTTP/3 handshake failed.
+    H3Handshake,
+    /// Accepting an HTTP/3 request failed.
+    RequestAccept,
+    /// The HTTP/3 connection driver closed abnormally.
+    DriverClosed,
+    /// Closing the connection failed.
+    Close,
+    /// A transport error that does not fit a more specific kind.
+    Other,
+}
+
 /// Errors that can occur when using `masque`.
 ///
 /// The `Transport` and `InvalidCertificate` variants are always present so that
 /// the public enum shape does not change depending on Cargo feature unification.
 /// When the `h3` feature is disabled these variants are never constructed by
 /// the crate, but they remain part of the public API for forward compatibility.
-#[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
     /// The provided configuration was invalid.
@@ -47,14 +70,16 @@ pub enum Error {
     /// A transport-level error occurred while establishing or using an HTTP/3
     /// connection.
     Transport {
+        /// The phase of the transport stack where the failure occurred.
+        kind: TransportKind,
         /// A human-readable description of what went wrong.
         message: String,
         /// The underlying error from the transport stack, if available.
         ///
         /// This field is preserved for observability and debugging. It is not
-        /// used in equality comparisons and is dropped when the error is cloned
-        /// because `dyn Error` is not cloneable.
-        source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+        /// used in equality comparisons; it is kept when the error is cloned
+        /// by storing it in an [`Arc`].
+        source: Option<Arc<dyn std::error::Error + Send + Sync + 'static>>,
     },
 
     /// A TLS certificate was invalid or could not be generated.
@@ -64,9 +89,9 @@ pub enum Error {
         /// The underlying error from the TLS stack, if available.
         ///
         /// This field is preserved for observability and debugging. It is not
-        /// used in equality comparisons and is dropped when the error is cloned
-        /// because `dyn Error` is not cloneable.
-        source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
+        /// used in equality comparisons; it is kept when the error is cloned
+        /// by storing it in an [`Arc`].
+        source: Option<Arc<dyn std::error::Error + Send + Sync + 'static>>,
     },
 
     /// A `SETTINGS_H3_DATAGRAM` value was invalid.
@@ -173,12 +198,14 @@ impl Error {
     /// Create an [`Error::Transport`] with an internally-generated message.
     #[cfg(feature = "h3")]
     pub(crate) fn transport_error(
+        kind: TransportKind,
         message: impl Into<String>,
         source: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
     ) -> Self {
         Self::Transport {
+            kind,
             message: message.into(),
-            source,
+            source: source.map(Arc::from),
         }
     }
 
@@ -191,7 +218,7 @@ impl Error {
     ) -> Self {
         Self::InvalidCertificate {
             message: message.into(),
-            source,
+            source: source.map(Arc::from),
         }
     }
 
@@ -233,13 +260,18 @@ impl Clone for Error {
             Self::NotImplemented { message } => Self::NotImplemented {
                 message: message.clone(),
             },
-            Self::Transport { message, .. } => Self::Transport {
+            Self::Transport {
+                kind,
+                message,
+                source,
+            } => Self::Transport {
+                kind: *kind,
                 message: message.clone(),
-                source: None,
+                source: source.clone(),
             },
-            Self::InvalidCertificate { message, .. } => Self::InvalidCertificate {
+            Self::InvalidCertificate { message, source } => Self::InvalidCertificate {
                 message: message.clone(),
-                source: None,
+                source: source.clone(),
             },
             Self::H3DatagramSetting { setting, value } => Self::H3DatagramSetting {
                 setting: *setting,
@@ -296,12 +328,16 @@ impl PartialEq for Error {
             ) => message_a == message_b,
             (
                 Self::Transport {
-                    message: message_a, ..
+                    kind: kind_a,
+                    message: message_a,
+                    ..
                 },
                 Self::Transport {
-                    message: message_b, ..
+                    kind: kind_b,
+                    message: message_b,
+                    ..
                 },
-            ) => message_a == message_b,
+            ) => kind_a == kind_b && message_a == message_b,
             (
                 Self::InvalidCertificate {
                     message: message_a, ..
@@ -361,7 +397,9 @@ impl fmt::Display for Error {
                 write!(f, "invalid varint ({kind:?}): {message}")
             }
             Error::NotImplemented { message } => write!(f, "not implemented: {message}"),
-            Error::Transport { message, .. } => write!(f, "transport error: {message}"),
+            Error::Transport { kind, message, .. } => {
+                write!(f, "transport error ({kind:?}): {message}")
+            }
             Error::InvalidCertificate { message, .. } => {
                 write!(f, "invalid certificate: {message}")
             }
@@ -382,6 +420,56 @@ impl fmt::Display for Error {
                 "HTTP/3 datagram or capsule protocol error ({H3_DATAGRAM_ERROR_CODE:#x}): {}",
                 message.0
             ),
+        }
+    }
+}
+
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::InvalidConfig { field, message } => f
+                .debug_struct("InvalidConfig")
+                .field("field", field)
+                .field("message", message)
+                .finish(),
+            Error::InvalidVarInt { kind, message } => f
+                .debug_struct("InvalidVarInt")
+                .field("kind", kind)
+                .field("message", message)
+                .finish(),
+            Error::NotImplemented { message } => f
+                .debug_struct("NotImplemented")
+                .field("message", message)
+                .finish(),
+            Error::Transport { kind, message, .. } => f
+                .debug_struct("Transport")
+                .field("kind", kind)
+                .field("message", message)
+                .finish_non_exhaustive(),
+            Error::InvalidCertificate { message, .. } => f
+                .debug_struct("InvalidCertificate")
+                .field("message", message)
+                .finish_non_exhaustive(),
+            Error::H3DatagramSetting { setting, value } => f
+                .debug_struct("H3DatagramSetting")
+                .field("setting", setting)
+                .field("value", value)
+                .finish(),
+            Error::H3SettingsConflict {
+                setting,
+                previous,
+                received,
+            } => f
+                .debug_struct("H3SettingsConflict")
+                .field("setting", setting)
+                .field("previous", previous)
+                .field("received", received)
+                .finish(),
+            Error::H3DatagramError { kind, message, .. } => f
+                .debug_struct("H3DatagramError")
+                .field("kind", kind)
+                .field("message", &message.0)
+                .finish_non_exhaustive(),
         }
     }
 }
@@ -429,10 +517,14 @@ mod tests {
     #[test]
     fn transport_error_display_includes_message() {
         let err = Error::Transport {
+            kind: TransportKind::Other,
             message: "connection refused".into(),
             source: None,
         };
-        assert_eq!(err.to_string(), "transport error: connection refused");
+        assert_eq!(
+            err.to_string(),
+            "transport error (Other): connection refused"
+        );
     }
 
     #[test]
@@ -442,10 +534,46 @@ mod tests {
             message: "buffer too short".into(),
         };
         let err = Error::Transport {
+            kind: TransportKind::Connect,
             message: "connection refused".into(),
-            source: Some(Box::new(inner.clone())),
+            source: Some(Arc::new(inner.clone())),
         };
         assert_eq!(err.source().map(|e| e.to_string()), Some(inner.to_string()));
+    }
+
+    #[test]
+    fn transport_error_preserves_source_after_clone() {
+        let inner = Error::InvalidVarInt {
+            kind: VarIntErrorKind::BufferTooShort,
+            message: "buffer too short".into(),
+        };
+        let err = Error::Transport {
+            kind: TransportKind::Connect,
+            message: "connection refused".into(),
+            source: Some(Arc::new(inner.clone())),
+        };
+        let cloned = err.clone();
+        assert_eq!(
+            cloned.source().map(|e| e.to_string()),
+            Some(inner.to_string())
+        );
+    }
+
+    #[test]
+    fn transport_error_equality_ignores_source() {
+        let a = Error::Transport {
+            kind: TransportKind::Connect,
+            message: "failed".into(),
+            source: Some(Arc::new(Error::NotImplemented {
+                message: "a".into(),
+            })),
+        };
+        let b = Error::Transport {
+            kind: TransportKind::Connect,
+            message: "failed".into(),
+            source: None,
+        };
+        assert_eq!(a, b);
     }
 
     #[test]
@@ -507,6 +635,7 @@ mod tests {
                 message: "CONNECT-UDP proxy".into(),
             },
             Error::Transport {
+                kind: TransportKind::Other,
                 message: "connection refused".into(),
                 source: None,
             },
