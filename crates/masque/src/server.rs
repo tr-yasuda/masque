@@ -58,6 +58,7 @@ impl H3Server {
 
         let h3_conn = h3::server::builder()
             .enable_datagram(true)
+            .enable_extended_connect(true)
             .build(h3_quinn::Connection::new(conn))
             .await
             .map_err(|e| Error::transport_error("HTTP/3 handshake failed", Some(Box::new(e))))?;
@@ -78,11 +79,14 @@ impl H3Server {
 
     /// Close the underlying QUIC endpoint.
     ///
-    /// `error_code` `0` signals a graceful application close. Existing
-    /// connections accepted before this call are not forcibly terminated by
-    /// this method.
+    /// Uses [`h3::error::Code::H3_NO_ERROR`] to signal a graceful HTTP/3 close.
+    /// Existing connections accepted before this call are not forcibly
+    /// terminated by this method.
     pub fn close(&self) {
-        self.endpoint.close(0u32.into(), b"server closed");
+        self.endpoint.close(
+            quinn::VarInt::from_u32(h3::error::Code::H3_NO_ERROR.value() as u32),
+            b"server closed",
+        );
     }
 }
 
