@@ -19,7 +19,6 @@ h3 = [
     "dep:h3-quinn",
     "dep:rustls",
     "dep:tokio",
-    "dep:rcgen",
     "dep:bytes",
     "dep:http",
 ]

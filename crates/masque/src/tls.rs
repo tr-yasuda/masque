@@ -7,10 +7,10 @@
 /// HTTP/3 ALPN identifier used by both client and server.
 pub const H3_ALPN: &[u8] = b"h3";
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(feature = "test-utils")]
 pub use test_utils::{dangerous_test_client_config, generate_self_signed_cert};
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(feature = "test-utils")]
 mod test_utils {
     use std::sync::Arc;
 
@@ -127,7 +127,7 @@ mod test_utils {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-utils"))]
 mod tests {
     use super::*;
 
