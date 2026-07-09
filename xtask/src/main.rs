@@ -30,9 +30,9 @@ const HELP_TEXT: &str = concat!(
     "  ci          Run fmt, clippy, doc, and test checks (with and without the h3 feature)\n",
     "  fmt         Run cargo fmt --all -- --check\n",
     "  clippy      Run cargo clippy --workspace --all-targets --locked -- -D warnings\n",
-    "  clippy-h3   Run cargo clippy --workspace --all-targets --features masque/h3 --locked -- -D warnings\n",
+    "  clippy-h3   Run cargo clippy --workspace --all-targets --features masque/h3,masque/test-utils --locked -- -D warnings\n",
     "  doc         Run cargo doc --workspace --no-deps --document-private-items --locked (RUSTDOCFLAGS=-D warnings)\n",
-    "  doc-h3      Run cargo doc --workspace --no-deps --document-private-items --features masque/h3 --locked (RUSTDOCFLAGS=-D warnings)\n",
+    "  doc-h3      Run cargo doc --workspace --no-deps --document-private-items --features masque/h3,masque/test-utils --locked (RUSTDOCFLAGS=-D warnings)\n",
     "  test        Run cargo test --workspace --locked\n",
     "  test-h3     Run cargo test --workspace --features masque/h3,masque/test-utils --locked\n",
     "  help        Print this message\n",
@@ -96,14 +96,14 @@ fn run_clippy() -> ExitCode {
 
 fn run_clippy_h3() -> ExitCode {
     println!(
-        "Running cargo clippy --workspace --all-targets --features masque/h3 --locked -- -D warnings..."
+        "Running cargo clippy --workspace --all-targets --features masque/h3,masque/test-utils --locked -- -D warnings..."
     );
     run_command(Command::new("cargo").args([
         "clippy",
         "--workspace",
         "--all-targets",
         "--features",
-        "masque/h3",
+        "masque/h3,masque/test-utils",
         "--locked",
         "--",
         "-D",
@@ -130,7 +130,7 @@ fn run_doc() -> ExitCode {
 
 fn run_doc_h3() -> ExitCode {
     println!(
-        "Running cargo doc --workspace --no-deps --document-private-items --features masque/h3 --locked (RUSTDOCFLAGS=-D warnings)..."
+        "Running cargo doc --workspace --no-deps --document-private-items --features masque/h3,masque/test-utils --locked (RUSTDOCFLAGS=-D warnings)..."
     );
     run_command(
         Command::new("cargo")
@@ -140,7 +140,7 @@ fn run_doc_h3() -> ExitCode {
                 "--no-deps",
                 "--document-private-items",
                 "--features",
-                "masque/h3",
+                "masque/h3,masque/test-utils",
                 "--locked",
             ])
             .env("RUSTDOCFLAGS", "-D warnings"),

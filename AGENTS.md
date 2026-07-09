@@ -109,9 +109,9 @@ A tiny development-task runner. It is invoked via the alias defined in
 cargo xtask ci          # run fmt, clippy, doc, and test (with and without the h3 feature)
 cargo xtask fmt         # cargo fmt --all -- --check
 cargo xtask clippy      # cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo xtask clippy-h3   # cargo clippy --workspace --all-targets --features masque/h3 --locked -- -D warnings
+cargo xtask clippy-h3   # cargo clippy --workspace --all-targets --features masque/h3,masque/test-utils --locked -- -D warnings
 cargo xtask doc         # cargo doc --workspace --no-deps --document-private-items --locked (RUSTDOCFLAGS=-D warnings)
-cargo xtask doc-h3      # cargo doc --workspace --no-deps --document-private-items --features masque/h3 --locked (RUSTDOCFLAGS=-D warnings)
+cargo xtask doc-h3      # cargo doc --workspace --no-deps --document-private-items --features masque/h3,masque/test-utils --locked (RUSTDOCFLAGS=-D warnings)
 cargo xtask test        # cargo test --workspace --locked
 cargo xtask test-h3     # cargo test --workspace --features masque/h3,masque/test-utils --locked
 cargo xtask help        # print usage
@@ -135,14 +135,14 @@ cargo fmt --all -- --check
 # Run clippy with warnings treated as errors
 cargo clippy --workspace --all-targets --locked -- -D warnings
 
-# Run clippy with the HTTP/3 feature
-cargo clippy --workspace --all-targets --features masque/h3 --locked -- -D warnings
+# Run clippy with the HTTP/3 feature (including test-utils so all h3 code is linted)
+cargo clippy --workspace --all-targets --features masque/h3,masque/test-utils --locked -- -D warnings
 
 # Build documentation; rustdoc warnings are errors
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --locked
 
-# Build documentation with the HTTP/3 feature
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --features masque/h3 --locked
+# Build documentation with the HTTP/3 feature (including test-utils so all h3 docs are checked)
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --features masque/h3,masque/test-utils --locked
 
 # Run the full development helper
 cargo xtask ci
@@ -272,6 +272,6 @@ cargo xtask ci
 ```
 
 This runs `cargo fmt --check`, `cargo clippy` (with and without `--features
-masque/h3`), `cargo doc` with `RUSTDOCFLAGS=-D warnings` (with and without
-`--features masque/h3`), and `cargo test` (with `--features masque/h3,masque/test-utils`
+masque/h3,masque/test-utils`), `cargo doc` with `RUSTDOCFLAGS=-D warnings` (with and without
+`--features masque/h3,masque/test-utils`), and `cargo test` (with `--features masque/h3,masque/test-utils`
 and without any feature).
