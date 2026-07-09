@@ -9,16 +9,24 @@ use std::net::SocketAddr;
 
 use bytes::Bytes;
 
-use crate::{Error, Result};
+use crate::{Error, Result, TransportKind};
 
 /// A minimal HTTP/3 server backed by Quinn.
 ///
 /// `H3Server` listens on a UDP socket and accepts incoming QUIC connections,
 /// returning an [`H3Connection`] for each successfully established HTTP/3
 /// connection.
-#[derive(Debug)]
 pub struct H3Server {
     endpoint: quinn::Endpoint,
+}
+
+impl fmt::Debug for H3Server {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let local_addr = self.endpoint.local_addr().ok();
+        f.debug_struct("H3Server")
+            .field("local_addr", &local_addr)
+            .finish_non_exhaustive()
+    }
 }
 
 impl H3Server {
@@ -32,14 +40,19 @@ impl H3Server {
     /// Returns [`Error::Transport`] if the QUIC endpoint cannot be created.
     pub fn bind(bind_addr: SocketAddr, server_config: quinn::ServerConfig) -> Result<Self> {
         let endpoint = quinn::Endpoint::server(server_config, bind_addr).map_err(|e| {
-            Error::transport_error("failed to create server endpoint", Some(Box::new(e)))
+            Error::transport_error(
+                TransportKind::EndpointCreation,
+                "failed to create server endpoint",
+                Some(Box::new(e)),
+            )
         })?;
         Ok(Self { endpoint })
     }
 
     /// Accept the next incoming HTTP/3 connection.
     ///
-    /// Returns `Ok(None)` when the endpoint has been closed.
+    /// Returns `Ok(None)` when the endpoint has been closed, including after a
+    /// call to [`H3Server::close`].
     ///
     /// # Errors
     ///
@@ -51,9 +64,17 @@ impl H3Server {
             None => return Ok(None),
         };
 
-        let conn = incoming
-            .await
-            .map_err(|e| Error::transport_error("QUIC handshake failed", Some(Box::new(e))))?;
+        let conn = match incoming.await {
+            Ok(conn) => conn,
+            Err(e) if is_locally_closed(&e) => return Ok(None),
+            Err(e) => {
+                return Err(Error::transport_error(
+                    TransportKind::QuicHandshake,
+                    "QUIC handshake failed",
+                    Some(Box::new(e)),
+                ));
+            }
+        };
         let remote_addr = conn.remote_address();
 
         let h3_conn = h3::server::builder()
@@ -61,7 +82,13 @@ impl H3Server {
             .enable_extended_connect(true)
             .build(h3_quinn::Connection::new(conn))
             .await
-            .map_err(|e| Error::transport_error("HTTP/3 handshake failed", Some(Box::new(e))))?;
+            .map_err(|e| {
+                Error::transport_error(
+                    TransportKind::H3Handshake,
+                    "HTTP/3 handshake failed",
+                    Some(Box::new(e)),
+                )
+            })?;
 
         Ok(Some(H3Connection {
             connection: h3_conn,
@@ -72,9 +99,13 @@ impl H3Server {
     /// Return the local socket address the server is bound to.
     #[must_use = "the returned address is the only way to discover the bound port when 0 is used"]
     pub fn local_addr(&self) -> Result<SocketAddr> {
-        self.endpoint
-            .local_addr()
-            .map_err(|e| Error::transport_error("failed to get local address", Some(Box::new(e))))
+        self.endpoint.local_addr().map_err(|e| {
+            Error::transport_error(
+                TransportKind::Other,
+                "failed to get local address",
+                Some(Box::new(e)),
+            )
+        })
     }
 
     /// Close the underlying QUIC endpoint.
@@ -82,9 +113,13 @@ impl H3Server {
     /// Uses [`h3::error::Code::H3_NO_ERROR`] to signal a graceful HTTP/3 close.
     /// Existing connections accepted before this call are not forcibly
     /// terminated by this method.
+    ///
+    /// Repeated calls are delegated to [`quinn::Endpoint::close`], which is
+    /// idempotent.
     pub fn close(&self) {
         self.endpoint.close(
-            quinn::VarInt::from_u32(h3::error::Code::H3_NO_ERROR.value() as u32),
+            quinn::VarInt::from_u64(h3::error::Code::H3_NO_ERROR.value())
+                .expect("H3_NO_ERROR fits in a QUIC varint"),
             b"server closed",
         );
     }
@@ -99,9 +134,8 @@ pub struct H3Connection {
 impl fmt::Debug for H3Connection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("H3Connection")
-            .field("connection", &"...")
             .field("remote_addr", &self.remote_addr)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -124,9 +158,19 @@ impl H3Connection {
         &mut self,
     ) -> Result<Option<h3::server::RequestResolver<h3_quinn::Connection, Bytes>>> {
         self.connection.accept().await.map_err(|e| {
-            Error::transport_error("failed to accept HTTP/3 request", Some(Box::new(e)))
+            Error::transport_error(
+                TransportKind::RequestAccept,
+                "failed to accept HTTP/3 request",
+                Some(Box::new(e)),
+            )
         })
     }
+}
+
+/// Returns true if `err` represents a Quinn
+/// [`quinn::ConnectionError::LocallyClosed`].
+fn is_locally_closed(err: &quinn::ConnectionError) -> bool {
+    matches!(err, quinn::ConnectionError::LocallyClosed)
 }
 
 #[cfg(test)]
