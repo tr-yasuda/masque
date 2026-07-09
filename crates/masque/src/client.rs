@@ -83,7 +83,7 @@ impl H3Client {
         // without polling the driver themselves.
         let driver_handle = tokio::spawn(async move {
             let result = std::future::poll_fn(|cx| driver.poll_close(cx)).await;
-            if result.is_h3_no_error() {
+            if result.is_h3_no_error() || is_locally_closed(&result) {
                 Ok(())
             } else {
                 Err(Error::transport_error(
@@ -121,15 +121,33 @@ impl H3Client {
     /// Close the underlying QUIC endpoint and wait for the HTTP/3 driver task
     /// to finish.
     ///
-    /// `error_code` `0` signals a graceful application close. Any error raised
-    /// by the driver task is returned so callers can observe abnormal
-    /// connection termination.
+    /// Uses [`h3::error::Code::H3_NO_ERROR`] to signal a graceful HTTP/3 close.
+    /// Any error raised by the driver task is returned so callers can observe
+    /// abnormal connection termination.
     pub async fn close(self) -> Result<()> {
-        self.endpoint.close(0u32.into(), b"client closed");
+        self.endpoint.close(
+            quinn::VarInt::from_u32(h3::error::Code::H3_NO_ERROR.value() as u32),
+            b"client closed",
+        );
         self.driver_handle
             .await
             .map_err(|e| Error::transport_error("HTTP/3 driver task panicked", Some(Box::new(e))))?
     }
+}
+
+/// Returns true if `err` or one of its sources represents a Quinn
+/// [`quinn::ConnectionError::LocallyClosed`]. This can happen after
+/// `H3Client::close()` sends `H3_NO_ERROR` and the h3 driver observes the
+/// resulting local QUIC close before it finishes polling.
+fn is_locally_closed(err: &dyn std::error::Error) -> bool {
+    let mut current: Option<&dyn std::error::Error> = Some(err);
+    while let Some(e) = current {
+        if format!("{e:?}").contains("LocallyClosed") {
+            return true;
+        }
+        current = e.source();
+    }
+    false
 }
 
 #[cfg(test)]
