@@ -35,10 +35,19 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Run clippy with h3 feature
+        run: cargo clippy --workspace --all-targets --features masque/h3 --locked -- -D warnings
       - name: Check documentation
         if: matrix.os == 'ubuntu-latest'
         run: cargo doc --workspace --no-deps --document-private-items --locked
         env:
           RUSTDOCFLAGS: -D warnings
+      - name: Check documentation with h3 feature
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo doc --workspace --no-deps --document-private-items --features masque/h3 --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
       - name: Run tests
         run: cargo test --workspace --locked
+      - name: Run tests with h3 feature
+        run: cargo test --workspace --features masque/h3,masque/test-utils --locked

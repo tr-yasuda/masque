@@ -17,6 +17,22 @@
 //!
 //! Higher-level CONNECT-UDP logic will be built on top of these primitives.
 //!
+//! ## HTTP/3 transport scaffolding
+//!
+//! When the `h3` feature is enabled, the crate exposes:
+//!
+//! - `H3Client` for opening outbound HTTP/3 connections.
+//! - `H3Server` and `H3Connection` for accepting inbound HTTP/3
+//!   connections.
+//! - `H3_ALPN` for the HTTP/3 ALPN identifier.
+//!
+//! When the `test-utils` feature is also enabled, `generate_self_signed_cert`
+//! and `dangerous_test_client_config` are available for local testing. These
+//! helpers must not be used in production.
+//!
+//! These types are intentionally thin wrappers around `quinn` and `h3`,
+//! focused on CONNECT-UDP rather than a generic HTTP/3 client/server framework.
+//!
 //! ## Current status
 //!
 //! The library is a learning and verification scaffold. Full QUIC / HTTP/3
@@ -36,6 +52,13 @@ pub mod quic_varint;
 pub mod settings;
 pub mod types;
 
+#[cfg(feature = "h3")]
+pub mod client;
+#[cfg(feature = "h3")]
+pub mod server;
+#[cfg(feature = "h3")]
+pub mod tls;
+
 pub use capsule::{Capsule, CapsuleParser, CapsuleType};
 pub use capsule_protocol::{
     CAPSULE_PROTOCOL, CapsuleProtocolError, parse_capsule_protocol, serialize_capsule_protocol,
@@ -48,3 +71,12 @@ pub use settings::{
     H3DatagramSettingValue, SETTINGS_H3_DATAGRAM, validate_h3_datagram_setting_value,
 };
 pub use types::{Protocol, Session};
+
+#[cfg(feature = "h3")]
+pub use client::H3Client;
+#[cfg(feature = "h3")]
+pub use server::{H3Connection, H3Server};
+#[cfg(feature = "h3")]
+pub use tls::H3_ALPN;
+#[cfg(all(feature = "h3", feature = "test-utils"))]
+pub use tls::{dangerous_test_client_config, generate_self_signed_cert};

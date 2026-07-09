@@ -10,6 +10,44 @@ description = "A Rust library for MASQUE protocols (CONNECT-UDP, CONNECT-IP, CON
 readme = "../../README.md"
 publish = false
 
+[features]
+default = []
+# HTTP/3 transport scaffolding using Quinn, h3, and rustls.
+h3 = [
+    "dep:quinn",
+    "dep:h3",
+    "dep:h3-quinn",
+    "dep:rustls",
+    "dep:tokio",
+    "dep:rcgen",
+    "dep:bytes",
+    "dep:http",
+]
+# Test-only helpers such as self-signed certificate generation and a
+# certificate-verification-skipping client config. Never enable this in
+# production builds.
+test-utils = ["dep:rcgen"]
+
 [dependencies]
+# QUIC transport. Required by the optional `h3` feature.
+quinn = { version = "0.11", optional = true }
+# HTTP/3 implementation. Required by the optional `h3` feature.
+h3 = { version = "0.0.8", optional = true }
+# h3 driver for Quinn. Pinned to 0.0.10 because 0.0.8 is incompatible with
+# quinn 0.11.11.
+h3-quinn = { version = "0.0.10", optional = true }
+# TLS 1.3 for QUIC handshakes. Required by the optional `h3` feature.
+rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std"] }
+# Async runtime used by the `h3` feature examples and tests.
+tokio = { version = "1", optional = true, features = ["rt", "macros", "sync", "time"] }
+# Self-signed certificate generation for tests. Required by `h3` and `test-utils`.
+rcgen = { version = "0.13", optional = true }
+# Byte buffer type used by h3 request/response bodies.
+bytes = { version = "1", optional = true }
+# HTTP request/response types used by the `h3` feature public API and tests.
+http = { version = "1", optional = true }
 
 [dev-dependencies]
+
+[package.metadata.docs.rs]
+all-features = true

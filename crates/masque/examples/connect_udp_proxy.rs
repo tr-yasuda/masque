@@ -11,7 +11,6 @@
 //! ```
 //!
 //! TODO:
-//! - Integrate an HTTP/3 client/server crate (see README for candidates).
 //! - Accept CONNECT-UDP requests (`:method = CONNECT`, `:protocol = connect-udp`).
 //! - Map HTTP Datagrams (RFC 9297) to UDP payloads.
 //! - Implement Capsule Protocol handling for context IDs.
