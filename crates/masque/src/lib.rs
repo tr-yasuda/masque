@@ -78,5 +78,5 @@ pub use client::H3Client;
 pub use server::{H3Connection, H3Server};
 #[cfg(feature = "h3")]
 pub use tls::H3_ALPN;
-#[cfg(all(feature = "h3", feature = "test-utils"))]
+#[cfg(feature = "test-utils")]
 pub use tls::{dangerous_test_client_config, generate_self_signed_cert};
