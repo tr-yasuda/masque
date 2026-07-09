@@ -1,8 +1,10 @@
-//! TLS helpers for local HTTP/3 testing.
+//! TLS helpers for HTTP/3.
 //!
-//! The functions in this module are intended for examples and tests only. They
-//! generate self-signed certificates and disable certificate verification; do
-//! not use them in production.
+//! The [`H3_ALPN`] constant is always available and identifies the HTTP/3 ALPN.
+//!
+//! The self-signed certificate helpers and the certificate-verification-
+//! skipping client config are gated behind the `test-utils` feature. They are
+//! intended for examples and tests only; do not use them in production.
 
 /// HTTP/3 ALPN identifier used by both client and server.
 pub const H3_ALPN: &[u8] = b"h3";
