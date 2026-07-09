@@ -116,7 +116,9 @@ impl H3Client {
         let driver_closing = Arc::clone(&closing);
         let driver_handle = Some(tokio::spawn(async move {
             let result = std::future::poll_fn(|cx| driver.poll_close(cx)).await;
-            if result.is_h3_no_error() || driver_closing.load(Ordering::SeqCst) {
+            if result.is_h3_no_error()
+                || (driver_closing.load(Ordering::SeqCst) && is_locally_closed(&result))
+            {
                 Ok(())
             } else {
                 Err(Error::transport_error(
@@ -181,9 +183,8 @@ impl H3Client {
 
 impl Drop for H3Client {
     fn drop(&mut self) {
-        // Close the endpoint so the driver observes a local close and the
-        // background task can finish. Then abort the handle in case the driver
-        // is still blocked.
+        // Close the endpoint so the background task observes a local close and
+        // can finish. Then abort the handle in case the driver is still blocked.
         self.closing.store(true, Ordering::SeqCst);
         self.endpoint.close(h3_no_error_varint(), b"client dropped");
         if let Some(handle) = self.driver_handle.take() {
@@ -196,6 +197,19 @@ impl Drop for H3Client {
 fn h3_no_error_varint() -> quinn::VarInt {
     quinn::VarInt::from_u64(h3::error::Code::H3_NO_ERROR.value())
         .expect("H3_NO_ERROR fits in a QUIC varint")
+}
+
+/// Returns true if `err` represents a graceful close initiated by the local
+/// peer.
+///
+/// When the local endpoint is closed, `h3-quinn` surfaces the underlying
+/// [`quinn::ConnectionError::LocallyClosed`] inside a
+/// `ConnectionError::Remote(Undefined(...))`. `h3::error::ConnectionError`
+/// only exposes `is_h3_no_error()` publicly, so we detect the local close by
+/// inspecting the debug representation. This is intentionally narrow and only
+/// used when the client has explicitly initiated a close.
+fn is_locally_closed(err: &h3::error::ConnectionError) -> bool {
+    format!("{:?}", err).contains("LocallyClosed")
 }
 
 #[cfg(test)]
