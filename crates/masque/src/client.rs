@@ -205,11 +205,13 @@ fn h3_no_error_varint() -> quinn::VarInt {
 /// When the local endpoint is closed, `h3-quinn` surfaces the underlying
 /// [`quinn::ConnectionError::LocallyClosed`] inside a
 /// `ConnectionError::Remote(Undefined(...))`. `h3::error::ConnectionError`
-/// only exposes `is_h3_no_error()` publicly, so we detect the local close by
-/// inspecting the debug representation. This is intentionally narrow and only
-/// used when the client has explicitly initiated a close.
+/// variants are `#[non_exhaustive]`, so they cannot be matched directly and
+/// the type only exposes `is_h3_no_error()`. We therefore detect the local
+/// close by looking for the specific `Undefined(LocallyClosed)` pattern in
+/// the debug representation. This is intentionally narrow and only used when
+/// the client has explicitly initiated a close.
 fn is_locally_closed(err: &h3::error::ConnectionError) -> bool {
-    format!("{:?}", err).contains("LocallyClosed")
+    format!("{:?}", err).contains("Undefined(LocallyClosed)")
 }
 
 #[cfg(test)]
