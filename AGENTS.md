@@ -51,7 +51,7 @@ masque/
 │       │   ├── quic_varint.rs      # QUIC variable-length integer helpers
 │       │   ├── server.rs           # HTTP/3 server (requires `h3` feature)
 │       │   ├── settings.rs         # HTTP/3 settings constants and validation
-│       │   ├── tls.rs              # Test-only TLS helpers (requires `h3`/`test-utils`)
+│       │   ├── tls.rs              # Test-only TLS helpers (requires `test-utils`)
 │       │   └── types.rs            # Protocol / Session types
 │       ├── tests/
 │       │   ├── h3_connection.rs    # HTTP/3 integration tests (requires `h3`/`test-utils`)
@@ -76,7 +76,7 @@ masque/
 
 The main library. It is marked `publish = false`. Default builds have no
 external dependencies. The optional `h3` feature adds `quinn`, `h3`, `h3-quinn`,
-`rustls`, `tokio`, `rcgen`, and `bytes`. Public modules:
+`rustls`, `tokio`, and `bytes`. Public modules:
 
 - `capsule` — Capsule Protocol message format, types, and streaming parser.
 - `capsule_protocol` — `Capsule-Protocol` header constant, parser, and
