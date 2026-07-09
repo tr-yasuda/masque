@@ -66,7 +66,9 @@ pub use capsule_protocol::{
 pub use config::Config;
 pub use datagram::{DatagramPayload, HttpDatagram, MAX_QUARTER_STREAM_ID};
 pub use datagram_capsule::DatagramCapsule;
-pub use error::{Error, H3_DATAGRAM_ERROR_CODE, H3DatagramErrorKind, Result, VarIntErrorKind};
+pub use error::{
+    Error, H3_DATAGRAM_ERROR_CODE, H3DatagramErrorKind, Result, TransportKind, VarIntErrorKind,
+};
 pub use settings::{
     H3DatagramSettingValue, SETTINGS_H3_DATAGRAM, validate_h3_datagram_setting_value,
 };
@@ -79,4 +81,11 @@ pub use server::{H3Connection, H3Server};
 #[cfg(feature = "h3")]
 pub use tls::H3_ALPN;
 #[cfg(feature = "test-utils")]
-pub use tls::{dangerous_test_client_config, generate_self_signed_cert};
+#[doc(hidden)]
+pub use tls::dangerous_test_client_config;
+#[cfg(feature = "test-utils")]
+pub use tls::generate_self_signed_cert;
+
+#[cfg(feature = "h3")]
+/// HTTP request/response types used by the `h3` feature public API.
+pub use http::{HeaderMap, Method, Request, Response, StatusCode, Uri, Version};

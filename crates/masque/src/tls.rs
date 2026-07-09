@@ -28,13 +28,46 @@ mod test_utils {
     /// Returns the certificate chain and private key. The certificate is generated
     /// for the given subject alternative names (typically `&["localhost"]`).
     ///
+    /// Empty names are rejected, and the list is bounded to avoid accidental
+    /// denial-of-service during certificate generation.
+    ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidCertificate`] if the certificate cannot be generated
-    /// or its key cannot be serialized.
+    /// Returns [`Error::InvalidCertificate`] if the certificate cannot be generated,
+    /// its key cannot be serialized, or the input is empty or unreasonably large.
     pub fn generate_self_signed_cert(
         subject_alt_names: &[&str],
     ) -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
+        const MAX_SANS: usize = 64;
+        const MAX_SAN_LEN: usize = 253;
+
+        if subject_alt_names.is_empty() {
+            return Err(Error::invalid_certificate_error(
+                "subject_alt_names must not be empty",
+                None,
+            ));
+        }
+        if subject_alt_names.len() > MAX_SANS {
+            return Err(Error::invalid_certificate_error(
+                "subject_alt_names must contain at most 64 entries",
+                None,
+            ));
+        }
+        for name in subject_alt_names {
+            if name.is_empty() {
+                return Err(Error::invalid_certificate_error(
+                    "subject_alt_names must not contain empty strings",
+                    None,
+                ));
+            }
+            if name.len() > MAX_SAN_LEN {
+                return Err(Error::invalid_certificate_error(
+                    "subject_alt_names entry exceeds maximum length",
+                    None,
+                ));
+            }
+        }
+
         let names: Vec<String> = subject_alt_names.iter().map(|s| s.to_string()).collect();
         let certified_key = rcgen::generate_simple_self_signed(names).map_err(|e| {
             Error::invalid_certificate_error(
@@ -119,6 +152,7 @@ mod test_utils {
         Ok(quinn::ClientConfig::new(Arc::new(
             quinn::crypto::rustls::QuicClientConfig::try_from(crypto).map_err(|e| {
                 crate::Error::transport_error(
+                    crate::TransportKind::Other,
                     "failed to build QUIC client config",
                     Some(Box::new(e)),
                 )
@@ -137,5 +171,18 @@ mod tests {
         assert_eq!(certs.len(), 1);
         assert!(!certs[0].is_empty());
         assert!(!key.secret_der().is_empty());
+    }
+
+    #[test]
+    fn generate_self_signed_cert_rejects_empty_san_list() {
+        assert!(generate_self_signed_cert(&[]).is_err());
+    }
+
+    #[test]
+    fn dangerous_test_client_config_returns_ok() {
+        // The helper must succeed and produce a config that can initialize a
+        // Quinn endpoint. Whether ALPN is correctly set is verified by the
+        // h3_connection integration tests.
+        let _config = dangerous_test_client_config().unwrap();
     }
 }
