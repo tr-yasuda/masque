@@ -242,8 +242,8 @@ impl UdpAssociation {
                 ),
             });
         }
-        let mut framed = crate::quic_varint::encode(0);
-        framed.extend_from_slice(&payload);
+        let mut framed = payload;
+        framed.insert(0, 0x00);
         HttpDatagram::new(self.stream_id, framed)
     }
 
@@ -268,8 +268,9 @@ impl UdpAssociation {
     /// [`H3DatagramErrorKind::InvalidContextId`] if the Context ID is missing,
     /// malformed, or not the default context (0).
     ///
-    /// Returns [`Error::InvalidConfig`] if the decoded UDP payload exceeds the
-    /// address-family UDP payload limit.
+    /// Returns [`Error::H3DatagramError`] with kind
+    /// [`H3DatagramErrorKind::PayloadTooLarge`] if the decoded UDP payload
+    /// exceeds the address-family UDP payload limit.
     pub fn decode_h3_datagram(&self, datagram: HttpDatagram) -> Result<Vec<u8>> {
         self.ensure_h3_datagrams_enabled()?;
         if datagram.stream_id() != self.stream_id {
@@ -292,20 +293,20 @@ impl UdpAssociation {
                 format!("unsupported CONNECT-UDP Context ID {context_id}, expected 0"),
             ));
         }
-        let udp_payload = payload[consumed..].to_vec();
+        let udp_payload = &payload[consumed..];
         let max = max_payload_for_addr(self.target);
         if udp_payload.len() > max {
-            return Err(Error::InvalidConfig {
-                field: "payload",
-                message: format!(
-                    "payload length {} exceeds maximum UDP payload size {} for {}",
+            return Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::PayloadTooLarge,
+                format!(
+                    "decoded UDP payload length {} exceeds maximum UDP payload size {} for {}",
                     udp_payload.len(),
                     max,
                     self.target.ip()
                 ),
-            });
+            ));
         }
-        Ok(udp_payload)
+        Ok(udp_payload.to_vec())
     }
 
     /// Return the local socket address.
@@ -649,8 +650,8 @@ mod tests {
         let err = assoc.decode_h3_datagram(datagram).unwrap_err();
         assert!(matches!(
             err,
-            Error::InvalidConfig {
-                field: "payload",
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::PayloadTooLarge,
                 ..
             }
         ));

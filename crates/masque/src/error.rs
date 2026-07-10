@@ -213,6 +213,8 @@ pub enum H3DatagramErrorKind {
     /// The CONNECT-UDP Context ID in the HTTP/3 Datagram payload is missing,
     /// malformed, or not the default context (0).
     InvalidContextId,
+    /// The decoded UDP payload exceeds the address-family maximum datagram size.
+    PayloadTooLarge,
 }
 
 /// A human-readable message for [`Error::H3DatagramError`].

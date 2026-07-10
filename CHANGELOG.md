@@ -17,8 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failures; both variants preserve the underlying source error chain.
 - CI and `xtask` checks for the `h3` feature.
 - `Error::H3DatagramError` variant and `H3_DATAGRAM_ERROR_CODE` constant for RFC 9297 `H3_DATAGRAM_ERROR` (0x33).
-- `H3DatagramErrorKind::NotNegotiated` and `H3DatagramErrorKind::MismatchedStreamId`
-  error kinds for HTTP/3 Datagram negotiation and routing failures.
+- `H3DatagramErrorKind::NotNegotiated`, `H3DatagramErrorKind::MismatchedStreamId`,
+  `H3DatagramErrorKind::InvalidContextId`, and `H3DatagramErrorKind::PayloadTooLarge`
+  error kinds for HTTP/3 Datagram negotiation, routing, and CONNECT-UDP framing failures.
 - `UdpAssociation::request_stream_id`, `UdpAssociation::encode_h3_datagram`, and
   `UdpAssociation::decode_h3_datagram` for mapping UDP payloads to HTTP/3
   Datagrams addressed to the CONNECT-UDP request stream.
