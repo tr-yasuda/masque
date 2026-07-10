@@ -1,6 +1,8 @@
 //! TLS helpers for HTTP/3.
 //!
-//! The [`H3_ALPN`] constant is always available and identifies the HTTP/3 ALPN.
+//! This module is available when the `h3` Cargo feature is enabled. The
+//! [`H3_ALPN`] constant is always available within that feature and identifies
+//! the HTTP/3 ALPN.
 //!
 //! The self-signed certificate helpers and the certificate-verification-
 //! skipping client config are gated behind the `test-utils` feature. They are
