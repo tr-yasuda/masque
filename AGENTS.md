@@ -51,7 +51,7 @@ masque/
 │       │   ├── quic_varint.rs      # QUIC variable-length integer helpers
 │       │   ├── server.rs           # HTTP/3 server (requires `h3` feature)
 │       │   ├── settings.rs         # HTTP/3 settings constants and validation
-│       │   ├── tls.rs              # Test-only TLS helpers (requires `test-utils`)
+│       │   ├── tls.rs              # TLS helpers (requires `h3`; self-signed cert helpers require `test-utils`)
 │       │   └── types.rs            # Protocol / Session types
 │       ├── tests/
 │       │   ├── h3_connection.rs    # HTTP/3 integration tests (requires `h3`/`test-utils`)
@@ -93,7 +93,9 @@ external dependencies. The optional `h3` feature adds `quinn`, `h3`, `h3-quinn`,
   the `h3` feature.
 - `settings` — HTTP/3 setting constants such as `SETTINGS_H3_DATAGRAM`, the
   `H3DatagramSettingValue` newtype, and validation helpers.
-- `tls` — Test-only TLS helpers, gated by the `h3` and `test-utils` features.
+- `tls` — TLS helpers. `H3_ALPN` is available when the `h3` feature is enabled;
+  the self-signed certificate and verification-skipping helpers are gated by
+  the `test-utils` feature.
 - `types` — `Protocol` enum (`ConnectUdp`, `ConnectIp`, `ConnectEthernet`) and
   `Session`, which tracks negotiated capabilities such as HTTP/3 Datagrams.
 
