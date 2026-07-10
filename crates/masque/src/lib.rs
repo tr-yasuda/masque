@@ -83,7 +83,10 @@ pub use settings::{
 pub use types::{Protocol, Session};
 
 #[cfg(feature = "h3")]
-pub use association::{AssociationId, MAX_UDP_PAYLOAD, UdpAssociation};
+pub use association::{
+    AssociationId, MAX_UDP_PAYLOAD, MAX_UDP_PAYLOAD_IPV4, MAX_UDP_PAYLOAD_IPV6, UdpAssociation,
+    max_payload_for_addr,
+};
 #[cfg(feature = "h3")]
 pub use client::H3Client;
 #[cfg(feature = "h3")]

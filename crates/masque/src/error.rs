@@ -43,6 +43,8 @@ pub enum TransportKind {
     UdpSend,
     /// Receiving a UDP datagram failed.
     UdpRecv,
+    /// Retrieving the local socket address failed.
+    UdpLocalAddr,
 }
 
 /// Errors that can occur when using `masque`.

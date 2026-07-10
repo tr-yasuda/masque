@@ -66,10 +66,34 @@ impl fmt::Display for AssociationId {
     }
 }
 
+/// Maximum payload size for a standard UDP datagram over IPv4.
+///
+/// IPv4 total length is 65,535 bytes; subtract the minimum 20-byte IPv4
+/// header and the 8-byte UDP header.
+pub const MAX_UDP_PAYLOAD_IPV4: usize = 65_507;
+
 /// Maximum payload size for a standard UDP datagram over IPv6.
 ///
 /// IPv6 payload length is 65,535 bytes; subtract the 8-byte UDP header.
-pub const MAX_UDP_PAYLOAD: usize = 65_527;
+pub const MAX_UDP_PAYLOAD_IPV6: usize = 65_527;
+
+/// Maximum payload size for a standard UDP datagram.
+///
+/// This is the larger of [`MAX_UDP_PAYLOAD_IPV4`] and
+/// [`MAX_UDP_PAYLOAD_IPV6`], matching the IPv6 limit.
+pub const MAX_UDP_PAYLOAD: usize = MAX_UDP_PAYLOAD_IPV6;
+
+/// Return the maximum UDP payload size for a single datagram sent to `addr`.
+///
+/// IPv4 and IPv6 have different header overhead, so the limit depends on the
+/// address family of the target.
+#[must_use]
+pub const fn max_payload_for_addr(addr: SocketAddr) -> usize {
+    match addr {
+        SocketAddr::V4(_) => MAX_UDP_PAYLOAD_IPV4,
+        SocketAddr::V6(_) => MAX_UDP_PAYLOAD_IPV6,
+    }
+}
 
 /// A UDP association for a CONNECT-UDP tunnel.
 ///
@@ -154,7 +178,7 @@ impl UdpAssociation {
         })?;
         socket.local_addr().map_err(|e| {
             Error::transport_error(
-                TransportKind::UdpBind,
+                TransportKind::UdpLocalAddr,
                 "failed to get local address",
                 Some(Box::new(e)),
             )
@@ -176,23 +200,28 @@ impl UdpAssociation {
     /// Send a UDP payload to the target.
     ///
     /// `payload` must fit in a single UDP datagram. The maximum supported size
-    /// is [`MAX_UDP_PAYLOAD`] bytes.
+    /// depends on the target address family:
+    ///
+    /// - IPv4: [`MAX_UDP_PAYLOAD_IPV4`] bytes
+    /// - IPv6: [`MAX_UDP_PAYLOAD_IPV6`] bytes
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidConfig`] if `payload` exceeds
-    /// [`MAX_UDP_PAYLOAD`].
+    /// Returns [`Error::InvalidConfig`] if `payload` exceeds the address-family
+    /// limit.
     ///
     /// Returns [`Error::Transport`] if the association has been closed or the
     /// datagram cannot be sent.
     pub async fn send(&self, payload: &[u8]) -> Result<usize> {
-        if payload.len() > MAX_UDP_PAYLOAD {
+        let max = max_payload_for_addr(self.target);
+        if payload.len() > max {
             return Err(Error::InvalidConfig {
                 field: "payload",
                 message: format!(
-                    "payload length {} exceeds maximum UDP payload size {}",
+                    "payload length {} exceeds maximum UDP payload size {} for {}",
                     payload.len(),
-                    MAX_UDP_PAYLOAD
+                    max,
+                    self.target.ip()
                 ),
             });
         }
@@ -413,7 +442,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn association_send_rejects_oversized_payload() {
+    async fn association_send_rejects_ipv4_oversized_payload() {
         let session = test_session();
         let listener = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let listener_addr = listener.local_addr().unwrap();
@@ -427,7 +456,7 @@ mod tests {
         .await
         .unwrap();
 
-        let payload = vec![0u8; MAX_UDP_PAYLOAD + 1];
+        let payload = vec![0u8; MAX_UDP_PAYLOAD_IPV4 + 1];
         let err = assoc.send(&payload).await.unwrap_err();
         assert!(matches!(
             err,
@@ -436,6 +465,80 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn association_send_accepts_ipv4_max_payload() {
+        let session = test_session();
+        let listener = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let listener_addr = listener.local_addr().unwrap();
+
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            listener_addr,
+            session,
+            AssociationId::new(42).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let payload = vec![0u8; MAX_UDP_PAYLOAD_IPV4];
+        let sent = assoc.send(&payload).await.unwrap();
+        assert_eq!(sent, payload.len());
+
+        let mut buf = vec![0u8; MAX_UDP_PAYLOAD];
+        let (n, _) = listener.recv_from(&mut buf).await.unwrap();
+        assert_eq!(n, payload.len());
+    }
+
+    #[tokio::test]
+    async fn association_send_rejects_ipv6_oversized_payload() {
+        let session = test_session();
+        let listener = UdpSocket::bind("[::1]:0").await.unwrap();
+        let listener_addr = listener.local_addr().unwrap();
+
+        let assoc = UdpAssociation::bind(
+            "[::1]:0".parse().unwrap(),
+            listener_addr,
+            session,
+            AssociationId::new(42).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let payload = vec![0u8; MAX_UDP_PAYLOAD_IPV6 + 1];
+        let err = assoc.send(&payload).await.unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConfig {
+                field: "payload",
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn association_send_accepts_ipv6_max_payload() {
+        let session = test_session();
+        let listener = UdpSocket::bind("[::1]:0").await.unwrap();
+        let listener_addr = listener.local_addr().unwrap();
+
+        let assoc = UdpAssociation::bind(
+            "[::1]:0".parse().unwrap(),
+            listener_addr,
+            session,
+            AssociationId::new(42).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let payload = vec![0u8; MAX_UDP_PAYLOAD_IPV6];
+        let sent = assoc.send(&payload).await.unwrap();
+        assert_eq!(sent, payload.len());
+
+        let mut buf = vec![0u8; MAX_UDP_PAYLOAD];
+        let (n, _) = listener.recv_from(&mut buf).await.unwrap();
+        assert_eq!(n, payload.len());
     }
 
     #[tokio::test]
