@@ -293,6 +293,12 @@ impl UdpAssociation {
                 format!("unsupported CONNECT-UDP Context ID {context_id}, expected 0"),
             ));
         }
+        if consumed != 1 {
+            return Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::InvalidContextId,
+                "CONNECT-UDP Context ID 0 must use the canonical 1-byte varint encoding",
+            ));
+        }
         let udp_payload = &payload[consumed..];
         let max = max_payload_for_addr(self.target);
         if udp_payload.len() > max {
@@ -744,6 +750,32 @@ mod tests {
 
         // 0x40 signals a 2-byte varint, but the second byte is missing.
         let datagram = HttpDatagram::new(test_stream_id(), [0x40]).unwrap();
+        let err = assoc.decode_h3_datagram(datagram).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::InvalidContextId,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn decode_h3_datagram_rejects_noncanonical_zero_context_id() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            test_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        // 0x40 0x00 is a valid 2-byte varint representing 0, but QUIC varints
+        // are required to use the shortest encoding, so it must be rejected.
+        let datagram = HttpDatagram::new(test_stream_id(), [0x40, 0x00, b'x']).unwrap();
         let err = assoc.decode_h3_datagram(datagram).unwrap_err();
         assert!(matches!(
             err,
