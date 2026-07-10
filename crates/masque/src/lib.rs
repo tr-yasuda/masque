@@ -14,6 +14,8 @@
 //!   [`serialize_capsule_protocol`] for the `Capsule-Protocol` header.
 //! - [`H3DatagramSettingValue`], [`SETTINGS_H3_DATAGRAM`], and [`Session`] for
 //!   negotiating and tracking HTTP/3 Datagram support.
+//! - [`ConnectUdpRequest`] and [`CONNECT_UDP_PROTOCOL`] for RFC 9298 CONNECT-UDP
+//!   request targets and URI template parsing.
 //!
 //! Higher-level CONNECT-UDP logic will be built on top of these primitives.
 //!
@@ -45,6 +47,7 @@
 pub mod capsule;
 pub mod capsule_protocol;
 pub mod config;
+pub mod connect_udp;
 pub mod datagram;
 pub mod datagram_capsule;
 pub mod error;
@@ -64,6 +67,7 @@ pub use capsule_protocol::{
     CAPSULE_PROTOCOL, CapsuleProtocolError, parse_capsule_protocol, serialize_capsule_protocol,
 };
 pub use config::Config;
+pub use connect_udp::{CONNECT_UDP_PROTOCOL, ConnectUdpRequest};
 pub use datagram::{DatagramPayload, HttpDatagram, MAX_QUARTER_STREAM_ID};
 pub use datagram_capsule::DatagramCapsule;
 pub use error::{

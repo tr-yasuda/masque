@@ -67,6 +67,14 @@ pub enum Error {
         message: String,
     },
 
+    /// The provided CONNECT-UDP request was invalid.
+    InvalidConnectUdpRequest {
+        /// The request field that caused the error.
+        field: &'static str,
+        /// A human-readable description of what is wrong.
+        message: String,
+    },
+
     /// A transport-level error occurred while establishing or using an HTTP/3
     /// connection.
     Transport {
@@ -260,6 +268,10 @@ impl Clone for Error {
             Self::NotImplemented { message } => Self::NotImplemented {
                 message: message.clone(),
             },
+            Self::InvalidConnectUdpRequest { field, message } => Self::InvalidConnectUdpRequest {
+                field,
+                message: message.clone(),
+            },
             Self::Transport {
                 kind,
                 message,
@@ -326,6 +338,16 @@ impl PartialEq for Error {
                 Self::NotImplemented { message: message_a },
                 Self::NotImplemented { message: message_b },
             ) => message_a == message_b,
+            (
+                Self::InvalidConnectUdpRequest {
+                    field: field_a,
+                    message: message_a,
+                },
+                Self::InvalidConnectUdpRequest {
+                    field: field_b,
+                    message: message_b,
+                },
+            ) => field_a == field_b && message_a == message_b,
             (
                 Self::Transport {
                     kind: kind_a,
@@ -397,6 +419,9 @@ impl fmt::Display for Error {
                 write!(f, "invalid varint ({kind:?}): {message}")
             }
             Error::NotImplemented { message } => write!(f, "not implemented: {message}"),
+            Error::InvalidConnectUdpRequest { field, message } => {
+                write!(f, "invalid CONNECT-UDP request for {field}: {message}")
+            }
             Error::Transport { kind, message, .. } => {
                 write!(f, "transport error ({kind:?}): {message}")
             }
@@ -439,6 +464,11 @@ impl fmt::Debug for Error {
                 .finish(),
             Error::NotImplemented { message } => f
                 .debug_struct("NotImplemented")
+                .field("message", message)
+                .finish(),
+            Error::InvalidConnectUdpRequest { field, message } => f
+                .debug_struct("InvalidConnectUdpRequest")
+                .field("field", field)
                 .field("message", message)
                 .finish(),
             Error::Transport { kind, message, .. } => f
@@ -512,6 +542,18 @@ mod tests {
             message: "CONNECT-UDP proxy".into(),
         };
         assert_eq!(err.to_string(), "not implemented: CONNECT-UDP proxy");
+    }
+
+    #[test]
+    fn invalid_connect_udp_request_display_includes_field_and_message() {
+        let err = Error::InvalidConnectUdpRequest {
+            field: "target_port",
+            message: "must be a valid port".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "invalid CONNECT-UDP request for target_port: must be a valid port"
+        );
     }
 
     #[test]
@@ -633,6 +675,10 @@ mod tests {
             },
             Error::NotImplemented {
                 message: "CONNECT-UDP proxy".into(),
+            },
+            Error::InvalidConnectUdpRequest {
+                field: "target_port",
+                message: "must not be zero".into(),
             },
             Error::Transport {
                 kind: TransportKind::Other,

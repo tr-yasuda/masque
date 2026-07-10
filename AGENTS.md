@@ -45,6 +45,7 @@ masque/
 │       │   ├── capsule_protocol.rs # Capsule-Protocol header helper
 │       │   ├── client.rs           # HTTP/3 client (requires `h3` feature)
 │       │   ├── config.rs           # Config validation and parsing
+│       │   ├── connect_udp.rs      # CONNECT-UDP request type and URI template
 │       │   ├── datagram.rs         # HTTP/3 Datagram payload types
 │       │   ├── datagram_capsule.rs # DATAGRAM capsule encoder/decoder
 │       │   ├── error.rs            # Error enum and Result type
@@ -83,11 +84,14 @@ external dependencies. The optional `h3` feature adds `quinn`, `h3`, `h3-quinn`,
   serializer.
 - `client` — HTTP/3 client scaffolding (`H3Client`), gated by the `h3` feature.
 - `config` — `Config` with validated `SocketAddr` bind/peer addresses.
+- `connect_udp` — `ConnectUdpRequest` and `CONNECT_UDP_PROTOCOL` for RFC 9298
+  CONNECT-UDP request targets and URI template parsing/generation.
 - `datagram` — HTTP/3 Datagram payload types and encoding/decoding.
 - `datagram_capsule` — DATAGRAM capsule encoder/decoder.
 - `error` — `Error` enum (`InvalidConfig`, `InvalidVarInt`, `NotImplemented`,
-  `Transport`, `InvalidCertificate`, `H3DatagramSetting`, `H3SettingsConflict`,
-  `H3DatagramError`) and `Result` alias.
+  `InvalidConnectUdpRequest`, `Transport`, `InvalidCertificate`,
+  `H3DatagramSetting`, `H3SettingsConflict`, `H3DatagramError`) and `Result`
+  alias.
 - `quic_varint` — QUIC variable-length integer encoding and decoding.
 - `server` — HTTP/3 server scaffolding (`H3Server`, `H3Connection`), gated by
   the `h3` feature.
