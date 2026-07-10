@@ -41,6 +41,7 @@ masque/
 │       ├── Cargo.toml
 │       ├── src/
 │       │   ├── lib.rs              # Crate root; re-exports public API
+│       │   ├── association.rs      # UDP association for CONNECT-UDP (requires `h3` feature)
 │       │   ├── capsule.rs          # Capsule Protocol message parser
 │       │   ├── capsule_protocol.rs # Capsule-Protocol header helper
 │       │   ├── client.rs           # HTTP/3 client (requires `h3` feature)
@@ -79,6 +80,8 @@ The main library. It is marked `publish = false`. Default builds have no
 external dependencies. The optional `h3` feature adds `quinn`, `h3`, `h3-quinn`,
 `rustls`, `tokio`, and `bytes`. Public modules:
 
+- `association` — `AssociationId` and `UdpAssociation` for managing the UDP
+  socket bound to a CONNECT-UDP request (requires the `h3` feature).
 - `capsule` — Capsule Protocol message format, types, and streaming parser.
 - `capsule_protocol` — `Capsule-Protocol` header constant, parser, and
   serializer.

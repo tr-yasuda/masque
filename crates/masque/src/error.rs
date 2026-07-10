@@ -35,6 +35,16 @@ pub enum TransportKind {
     Close,
     /// A transport error that does not fit a more specific kind.
     Other,
+    /// Binding a local UDP socket failed.
+    UdpBind,
+    /// Connecting a UDP socket to its target failed.
+    UdpConnect,
+    /// Sending a UDP datagram failed.
+    UdpSend,
+    /// Receiving a UDP datagram failed.
+    UdpRecv,
+    /// Retrieving the local socket address failed.
+    UdpLocalAddr,
 }
 
 /// Errors that can occur when using `masque`.
@@ -73,6 +83,17 @@ pub enum Error {
         field: &'static str,
         /// A human-readable description of what is wrong.
         message: String,
+    },
+
+    /// The association identifier is out of the valid QUIC varint range.
+    ///
+    /// RFC 9298 Section 8.2 uses a Context ID encoded as a QUIC variable-length
+    /// integer, which is limited to `2^62 - 1`.
+    InvalidAssociationId {
+        /// The invalid identifier value that was supplied.
+        value: u64,
+        /// The maximum value a QUIC varint can represent.
+        max: u64,
     },
 
     /// A transport-level error occurred while establishing or using an HTTP/3
@@ -272,6 +293,10 @@ impl Clone for Error {
                 field,
                 message: message.clone(),
             },
+            Self::InvalidAssociationId { value, max } => Self::InvalidAssociationId {
+                value: *value,
+                max: *max,
+            },
             Self::Transport {
                 kind,
                 message,
@@ -349,6 +374,16 @@ impl PartialEq for Error {
                 },
             ) => field_a == field_b && message_a == message_b,
             (
+                Self::InvalidAssociationId {
+                    value: value_a,
+                    max: max_a,
+                },
+                Self::InvalidAssociationId {
+                    value: value_b,
+                    max: max_b,
+                },
+            ) => value_a == value_b && max_a == max_b,
+            (
                 Self::Transport {
                     kind: kind_a,
                     message: message_a,
@@ -422,6 +457,9 @@ impl fmt::Display for Error {
             Error::InvalidConnectUdpRequest { field, message } => {
                 write!(f, "invalid CONNECT-UDP request for {field}: {message}")
             }
+            Error::InvalidAssociationId { value, max } => {
+                write!(f, "invalid association id {value}: must be at most {max}")
+            }
             Error::Transport { kind, message, .. } => {
                 write!(f, "transport error ({kind:?}): {message}")
             }
@@ -470,6 +508,11 @@ impl fmt::Debug for Error {
                 .debug_struct("InvalidConnectUdpRequest")
                 .field("field", field)
                 .field("message", message)
+                .finish(),
+            Error::InvalidAssociationId { value, max } => f
+                .debug_struct("InvalidAssociationId")
+                .field("value", value)
+                .field("max", max)
                 .finish(),
             Error::Transport { kind, message, .. } => f
                 .debug_struct("Transport")
@@ -680,6 +723,10 @@ mod tests {
                 field: "target_port",
                 message: "must not be zero".into(),
             },
+            Error::InvalidAssociationId {
+                value: u64::MAX,
+                max: crate::quic_varint::MAX_VARINT,
+            },
             Error::Transport {
                 kind: TransportKind::Other,
                 message: "connection refused".into(),
@@ -745,6 +792,22 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "invalid varint (ValueTooLarge): value too large"
+        );
+    }
+
+    #[test]
+    fn invalid_association_id_display_includes_value_and_max() {
+        let err = Error::InvalidAssociationId {
+            value: u64::MAX,
+            max: crate::quic_varint::MAX_VARINT,
+        };
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "invalid association id {}: must be at most {}",
+                u64::MAX,
+                crate::quic_varint::MAX_VARINT
+            )
         );
     }
 }

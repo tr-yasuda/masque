@@ -39,8 +39,9 @@ h3 = { version = "0.0.8", optional = true }
 h3-quinn = { version = "0.0.10", optional = true, features = ["datagram"] }
 # TLS 1.3 for QUIC handshakes. Required by the optional `h3` feature.
 rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std"] }
-# Async runtime used by the `h3` feature examples and tests.
-tokio = { version = "1", optional = true, features = ["rt", "macros", "sync", "time"] }
+# Async runtime and networking types used by the `h3` feature and the
+# CONNECT-UDP association module (`tokio::net::UdpSocket`).
+tokio = { version = "1", optional = true, features = ["rt", "macros", "sync", "time", "net"] }
 # Self-signed certificate generation for tests. Required by `test-utils`.
 rcgen = { version = "0.13", optional = true }
 # Byte buffer type used by h3 request/response bodies.
