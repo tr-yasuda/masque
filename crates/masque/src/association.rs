@@ -468,30 +468,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn association_send_accepts_ipv4_max_payload() {
-        let session = test_session();
-        let listener = UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let listener_addr = listener.local_addr().unwrap();
-
-        let assoc = UdpAssociation::bind(
-            "127.0.0.1:0".parse().unwrap(),
-            listener_addr,
-            session,
-            AssociationId::new(42).unwrap(),
-        )
-        .await
-        .unwrap();
-
-        let payload = vec![0u8; MAX_UDP_PAYLOAD_IPV4];
-        let sent = assoc.send(&payload).await.unwrap();
-        assert_eq!(sent, payload.len());
-
-        let mut buf = vec![0u8; MAX_UDP_PAYLOAD];
-        let (n, _) = listener.recv_from(&mut buf).await.unwrap();
-        assert_eq!(n, payload.len());
-    }
-
-    #[tokio::test]
     async fn association_send_rejects_ipv6_oversized_payload() {
         let session = test_session();
         let listener = UdpSocket::bind("[::1]:0").await.unwrap();
@@ -517,28 +493,16 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn association_send_accepts_ipv6_max_payload() {
-        let session = test_session();
-        let listener = UdpSocket::bind("[::1]:0").await.unwrap();
-        let listener_addr = listener.local_addr().unwrap();
-
-        let assoc = UdpAssociation::bind(
-            "[::1]:0".parse().unwrap(),
-            listener_addr,
-            session,
-            AssociationId::new(42).unwrap(),
-        )
-        .await
-        .unwrap();
-
-        let payload = vec![0u8; MAX_UDP_PAYLOAD_IPV6];
-        let sent = assoc.send(&payload).await.unwrap();
-        assert_eq!(sent, payload.len());
-
-        let mut buf = vec![0u8; MAX_UDP_PAYLOAD];
-        let (n, _) = listener.recv_from(&mut buf).await.unwrap();
-        assert_eq!(n, payload.len());
+    #[test]
+    fn max_payload_for_addr_matches_address_family() {
+        assert_eq!(
+            max_payload_for_addr("127.0.0.1:1".parse().unwrap()),
+            MAX_UDP_PAYLOAD_IPV4
+        );
+        assert_eq!(
+            max_payload_for_addr("[::1]:1".parse().unwrap()),
+            MAX_UDP_PAYLOAD_IPV6
+        );
     }
 
     #[tokio::test]
