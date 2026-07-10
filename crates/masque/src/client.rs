@@ -117,9 +117,10 @@ impl H3Client {
         let driver_handle = Some(tokio::spawn(async move {
             // Wait for either an intentional close signal or the driver to finish
             // on its own. If the close signal arrives first, the subsequent
-            // poll_close result is treated as graceful. If poll_close returns an
-            // error before any close signal, that error is surfaced to the
-            // caller.
+            // poll_close result is treated as graceful because the close was
+            // requested by the caller (see `H3Client::close`). If poll_close
+            // returns an error before any close signal, that error is surfaced to
+            // the caller.
             let mut close_requested = false;
             let result = tokio::select! {
                 biased;
@@ -175,8 +176,10 @@ impl H3Client {
     /// to finish.
     ///
     /// Uses [`h3::error::Code::H3_NO_ERROR`] to signal a graceful HTTP/3 close.
-    /// Any error raised by the driver task is returned so callers can observe
-    /// abnormal connection termination.
+    /// Once the close has been requested, any error reported by the driver task
+    /// is treated as part of the graceful shutdown and is not returned to the
+    /// caller. Errors that occur before the close signal reaches the driver are
+    /// returned so callers can observe abnormal connection termination.
     pub async fn close(mut self) -> Result<()> {
         // Notify the driver task that this is an intentional close. Dropping
         // the sender without sending also signals close in `Drop`, but here we
