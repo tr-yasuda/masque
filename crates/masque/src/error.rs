@@ -210,6 +210,9 @@ pub enum H3DatagramErrorKind {
     NotNegotiated,
     /// An HTTP/3 Datagram was addressed to a different request stream.
     MismatchedStreamId,
+    /// The CONNECT-UDP Context ID in the HTTP/3 Datagram payload is missing,
+    /// malformed, or not the default context (0).
+    InvalidContextId,
 }
 
 /// A human-readable message for [`Error::H3DatagramError`].

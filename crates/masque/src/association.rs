@@ -216,6 +216,9 @@ impl UdpAssociation {
     /// Encode an outbound UDP payload as an HTTP/3 Datagram addressed to this
     /// association's request stream.
     ///
+    /// The UDP payload is framed with the CONNECT-UDP default Context ID (0)
+    /// encoded as a QUIC variable-length integer, per RFC 9298 Section 8.2.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::H3DatagramError`] with kind
@@ -239,11 +242,17 @@ impl UdpAssociation {
                 ),
             });
         }
-        HttpDatagram::new(self.stream_id, payload)
+        let mut framed = crate::quic_varint::encode(0);
+        framed.extend_from_slice(&payload);
+        HttpDatagram::new(self.stream_id, framed)
     }
 
     /// Decode an inbound HTTP/3 Datagram into a UDP payload to forward to the
     /// target.
+    ///
+    /// The CONNECT-UDP Context ID is parsed from the start of the HTTP/3
+    /// Datagram payload and must be the default context (0), per RFC 9298
+    /// Section 8.2. The remaining bytes are returned as the UDP payload.
     ///
     /// # Errors
     ///
@@ -255,7 +264,11 @@ impl UdpAssociation {
     /// [`H3DatagramErrorKind::MismatchedStreamId`] if the datagram is not
     /// addressed to this association's request stream.
     ///
-    /// Returns [`Error::InvalidConfig`] if the datagram payload exceeds the
+    /// Returns [`Error::H3DatagramError`] with kind
+    /// [`H3DatagramErrorKind::InvalidContextId`] if the Context ID is missing,
+    /// malformed, or not the default context (0).
+    ///
+    /// Returns [`Error::InvalidConfig`] if the decoded UDP payload exceeds the
     /// address-family UDP payload limit.
     pub fn decode_h3_datagram(&self, datagram: HttpDatagram) -> Result<Vec<u8>> {
         self.ensure_h3_datagrams_enabled()?;
@@ -266,19 +279,33 @@ impl UdpAssociation {
             ));
         }
         let payload = datagram.into_payload();
+        let (context_id, consumed) = crate::quic_varint::decode(&payload).map_err(|e| {
+            Error::h3_datagram_error_with_source(
+                H3DatagramErrorKind::InvalidContextId,
+                "failed to decode CONNECT-UDP Context ID",
+                e,
+            )
+        })?;
+        if context_id != 0 {
+            return Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::InvalidContextId,
+                format!("unsupported CONNECT-UDP Context ID {context_id}, expected 0"),
+            ));
+        }
+        let udp_payload = payload[consumed..].to_vec();
         let max = max_payload_for_addr(self.target);
-        if payload.len() > max {
+        if udp_payload.len() > max {
             return Err(Error::InvalidConfig {
                 field: "payload",
                 message: format!(
                     "payload length {} exceeds maximum UDP payload size {} for {}",
-                    payload.len(),
+                    udp_payload.len(),
                     max,
                     self.target.ip()
                 ),
             });
         }
-        Ok(payload)
+        Ok(udp_payload)
     }
 
     /// Return the local socket address.
@@ -409,8 +436,6 @@ impl UdpAssociation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::H3DatagramErrorKind;
-    use crate::HttpDatagram;
     use crate::settings::H3DatagramSettingValue;
 
     fn test_stream_id() -> u64 {
@@ -461,12 +486,16 @@ mod tests {
         let datagram = assoc.encode_h3_datagram(payload.as_slice()).unwrap();
 
         assert_eq!(datagram.stream_id(), test_stream_id());
-        assert_eq!(datagram.payload(), payload);
+        // RFC 9298 prefixes the UDP payload with the default Context ID (0).
+        assert_eq!(datagram.payload(), &[0x00, b'h', b'e', b'l', b'l', b'o']);
 
         let encoded = datagram.encode_h3();
         let decoded = HttpDatagram::decode_h3(&encoded).unwrap();
         assert_eq!(decoded.stream_id(), test_stream_id());
-        assert_eq!(decoded.payload(), payload);
+        assert_eq!(
+            assoc.decode_h3_datagram(decoded).unwrap(),
+            payload.as_slice()
+        );
     }
 
     #[tokio::test]
@@ -539,7 +568,8 @@ mod tests {
 
         let datagram = assoc.encode_h3_datagram(Vec::new()).unwrap();
         assert_eq!(datagram.stream_id(), test_stream_id());
-        assert_eq!(datagram.payload(), &[]);
+        // Empty UDP payload still carries the default Context ID (0) prefix.
+        assert_eq!(datagram.payload(), &[0x00]);
 
         let decoded = assoc.decode_h3_datagram(datagram).unwrap();
         assert_eq!(decoded, &[]);
@@ -559,7 +589,9 @@ mod tests {
         .unwrap();
 
         let payload = b"hello";
-        let datagram = HttpDatagram::new(test_stream_id(), payload.as_slice()).unwrap();
+        let mut framed = vec![0x00];
+        framed.extend_from_slice(payload);
+        let datagram = HttpDatagram::new(test_stream_id(), framed).unwrap();
         let decoded = assoc.decode_h3_datagram(datagram).unwrap();
 
         assert_eq!(decoded, payload);
@@ -586,7 +618,8 @@ mod tests {
         .await
         .unwrap();
 
-        let datagram = HttpDatagram::new(test_stream_id(), b"hello").unwrap();
+        let datagram =
+            HttpDatagram::new(test_stream_id(), [0x00, b'h', b'e', b'l', b'l', b'o']).unwrap();
         let err = assoc.decode_h3_datagram(datagram).unwrap_err();
         assert!(matches!(
             err,
@@ -610,7 +643,8 @@ mod tests {
         .await
         .unwrap();
 
-        let payload = vec![0u8; MAX_UDP_PAYLOAD_IPV4 + 1];
+        let mut payload = vec![0x00];
+        payload.extend_from_slice(&vec![0u8; MAX_UDP_PAYLOAD_IPV4 + 1]);
         let datagram = HttpDatagram::new(test_stream_id(), payload).unwrap();
         let err = assoc.decode_h3_datagram(datagram).unwrap_err();
         assert!(matches!(
@@ -641,6 +675,79 @@ mod tests {
             err,
             Error::H3DatagramError {
                 kind: H3DatagramErrorKind::MismatchedStreamId,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn decode_h3_datagram_rejects_missing_context_id() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            test_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let datagram = HttpDatagram::new(test_stream_id(), Vec::new()).unwrap();
+        let err = assoc.decode_h3_datagram(datagram).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::InvalidContextId,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn decode_h3_datagram_rejects_nonzero_context_id() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            test_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let datagram = HttpDatagram::new(test_stream_id(), [0x01, b'x']).unwrap();
+        let err = assoc.decode_h3_datagram(datagram).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::InvalidContextId,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn decode_h3_datagram_rejects_truncated_context_id() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            test_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        // 0x40 signals a 2-byte varint, but the second byte is missing.
+        let datagram = HttpDatagram::new(test_stream_id(), [0x40]).unwrap();
+        let err = assoc.decode_h3_datagram(datagram).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::InvalidContextId,
                 ..
             }
         ));

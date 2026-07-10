@@ -29,18 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   breaking change; callers must supply the CONNECT-UDP request stream
   identifier. The identifier is validated as a client-initiated bidirectional
   QUIC stream ID before the UDP socket is bound.
-- Initial Cargo workspace with Rust 2024 edition and resolver 3.
-- `crates/masque` library crate with core types, errors, and configuration.
-- `capsule_protocol` module with the `Capsule-Protocol` header constant, parser, and serializer.
-- UDP echo client/server examples.
-- CONNECT-UDP proxy example stub with TODOs.
-- Integration test scaffold.
-- `xtask` helper for running fmt, clippy, doc, and tests.
-- GitHub Actions CI workflow.
-- README, CONTRIBUTING, SECURITY, and `LICENSE` files.
-
-### Changed
-
 - `Error` enum variants are no longer feature-gated: `Transport` and
   `InvalidCertificate` are always present so the enum shape does not depend on
   Cargo feature unification.
