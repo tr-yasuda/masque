@@ -206,6 +206,10 @@ pub enum H3DatagramErrorKind {
     Truncated,
     /// The capsule type was not the expected DATAGRAM type.
     UnexpectedCapsuleType,
+    /// HTTP/3 Datagrams were not negotiated for this association.
+    NotNegotiated,
+    /// An HTTP/3 Datagram was addressed to a different request stream.
+    MismatchedStreamId,
 }
 
 /// A human-readable message for [`Error::H3DatagramError`].
