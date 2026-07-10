@@ -268,6 +268,10 @@ impl Clone for Error {
             Self::NotImplemented { message } => Self::NotImplemented {
                 message: message.clone(),
             },
+            Self::InvalidConnectUdpRequest { field, message } => Self::InvalidConnectUdpRequest {
+                field,
+                message: message.clone(),
+            },
             Self::Transport {
                 kind,
                 message,
@@ -334,6 +338,16 @@ impl PartialEq for Error {
                 Self::NotImplemented { message: message_a },
                 Self::NotImplemented { message: message_b },
             ) => message_a == message_b,
+            (
+                Self::InvalidConnectUdpRequest {
+                    field: field_a,
+                    message: message_a,
+                },
+                Self::InvalidConnectUdpRequest {
+                    field: field_b,
+                    message: message_b,
+                },
+            ) => field_a == field_b && message_a == message_b,
             (
                 Self::Transport {
                     kind: kind_a,

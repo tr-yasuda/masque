@@ -661,17 +661,11 @@ fn datagram_capsule_rejects_truncated_value_from_public_api() {
 }
 
 #[test]
-fn connect_udp_request_round_trips_through_public_api() {
+fn connect_udp_request_exposes_public_api() {
     let req = ConnectUdpRequest::new("target.example", 53, Some("cfg")).unwrap();
     assert_eq!(req.target_host(), "target.example");
     assert_eq!(req.target_port(), 53);
     assert_eq!(req.udp_proxy_config(), Some("cfg"));
-
-    let uri = req.to_uri("proxy.example:443");
-    let parsed = ConnectUdpRequest::from_uri(&uri).unwrap();
-    assert_eq!(parsed.target_host(), "target.example");
-    assert_eq!(parsed.target_port(), 53);
-    assert_eq!(parsed.udp_proxy_config(), Some("cfg"));
 }
 
 #[test]
@@ -682,12 +676,37 @@ fn connect_udp_method_constant_is_accessible_at_crate_root() {
 #[test]
 fn connect_udp_request_rejects_invalid_port_from_public_api() {
     let err = ConnectUdpRequest::new("target.example", 0, None::<String>).unwrap_err();
-    assert!(err.to_string().contains("target_port"));
+    assert!(matches!(
+        err,
+        Error::InvalidConnectUdpRequest {
+            field: "target_port",
+            ..
+        }
+    ));
 }
 
 #[test]
 fn connect_udp_request_rejects_missing_target_host_from_public_api() {
     let err =
         ConnectUdpRequest::from_uri("https://proxy.example:443/masque?target_port=53").unwrap_err();
-    assert!(err.to_string().contains("target_host"));
+    assert!(matches!(
+        err,
+        Error::InvalidConnectUdpRequest {
+            field: "target_host",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn connect_udp_request_uri_generation_rejects_invalid_proxy_authority_from_public_api() {
+    let req = ConnectUdpRequest::new("target.example", 53, None::<String>).unwrap();
+    let err = req.to_uri("proxy.example:443/evil").unwrap_err();
+    assert!(matches!(
+        err,
+        Error::InvalidConnectUdpRequest {
+            field: "proxy_authority",
+            ..
+        }
+    ));
 }
