@@ -17,6 +17,8 @@
 //! constant exported by this module is the protocol token, not a method name.
 
 use std::fmt::Write as _;
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::str::FromStr;
 
 use crate::{Error, Result};
 
@@ -130,6 +132,7 @@ impl ConnectUdpRequest {
                 message: "URI authority must not contain userinfo".into(),
             });
         }
+        validate_authority(authority)?;
 
         let (path, query) = path_and_query
             .split_once('?')
@@ -338,80 +341,88 @@ fn validate_udp_proxy_config(config: impl Into<String>) -> Result<String> {
 }
 
 fn validate_proxy_authority(authority: &str) -> Result<()> {
+    validate_host_port("proxy_authority", authority)
+}
+
+fn validate_authority(authority: &str) -> Result<()> {
+    validate_host_port("authority", authority)
+}
+
+fn validate_host_port(field: &'static str, authority: &str) -> Result<()> {
     if authority.is_empty() {
         return Err(Error::InvalidConnectUdpRequest {
-            field: "proxy_authority",
+            field,
             message: "must not be empty".into(),
         });
     }
     if authority.len() > MAX_PROXY_AUTHORITY_LEN {
         return Err(Error::InvalidConnectUdpRequest {
-            field: "proxy_authority",
-            message: "proxy_authority is too long".into(),
+            field,
+            message: format!("{field} is too long"),
         });
     }
     if has_control_character(authority) {
         return Err(Error::InvalidConnectUdpRequest {
-            field: "proxy_authority",
-            message: "proxy_authority contains control characters".into(),
+            field,
+            message: format!("{field} contains control characters"),
         });
     }
 
     let (host, port_str) = if authority.starts_with('[') {
         let Some((host, port)) = authority.rsplit_once(':') else {
             return Err(Error::InvalidConnectUdpRequest {
-                field: "proxy_authority",
+                field,
                 message: "IPv6 authority must be '[ipv6]:port'".into(),
             });
         };
         if !host.ends_with(']') {
             return Err(Error::InvalidConnectUdpRequest {
-                field: "proxy_authority",
+                field,
                 message: "IPv6 authority must end with ']'".into(),
             });
         }
         let inner = &host[1..host.len() - 1];
-        validate_ipv6_literal(inner).map_err(map_host_error_to_proxy_authority)?;
+        validate_ipv6_literal(inner).map_err(|e| map_host_error(field, e))?;
         (inner, port)
     } else {
         let Some((host, port)) = authority.rsplit_once(':') else {
             return Err(Error::InvalidConnectUdpRequest {
-                field: "proxy_authority",
-                message: "proxy_authority must be 'host:port'".into(),
+                field,
+                message: format!("{field} must be 'host:port'"),
             });
         };
         if host.is_empty() {
             return Err(Error::InvalidConnectUdpRequest {
-                field: "proxy_authority",
-                message: "proxy_authority host must not be empty".into(),
+                field,
+                message: format!("{field} host must not be empty"),
             });
         }
-        validate_host(host).map_err(map_host_error_to_proxy_authority)?;
+        validate_host(host).map_err(|e| map_host_error(field, e))?;
         (host, port)
     };
 
     if port_str.is_empty() {
         return Err(Error::InvalidConnectUdpRequest {
-            field: "proxy_authority",
-            message: "proxy_authority port must not be empty".into(),
+            field,
+            message: format!("{field} port must not be empty"),
         });
     }
     if !port_str.bytes().all(|b| b.is_ascii_digit()) {
         return Err(Error::InvalidConnectUdpRequest {
-            field: "proxy_authority",
-            message: format!("proxy_authority port '{port_str}' is not numeric"),
+            field,
+            message: format!("{field} port '{port_str}' is not numeric"),
         });
     }
     let port = port_str
         .parse::<u16>()
         .map_err(|_| Error::InvalidConnectUdpRequest {
-            field: "proxy_authority",
-            message: format!("proxy_authority port '{port_str}' is out of range"),
+            field,
+            message: format!("{field} port '{port_str}' is out of range"),
         })?;
     if port == 0 {
         return Err(Error::InvalidConnectUdpRequest {
-            field: "proxy_authority",
-            message: "proxy_authority port must not be zero".into(),
+            field,
+            message: format!("{field} port must not be zero"),
         });
     }
 
@@ -420,12 +431,11 @@ fn validate_proxy_authority(authority: &str) -> Result<()> {
     Ok(())
 }
 
-fn map_host_error_to_proxy_authority(err: Error) -> Error {
+fn map_host_error(field: &'static str, err: Error) -> Error {
     match err {
-        Error::InvalidConnectUdpRequest { message, .. } => Error::InvalidConnectUdpRequest {
-            field: "proxy_authority",
-            message,
-        },
+        Error::InvalidConnectUdpRequest { message, .. } => {
+            Error::InvalidConnectUdpRequest { field, message }
+        }
         other => other,
     }
 }
@@ -452,46 +462,18 @@ fn validate_host(host: &str) -> Result<()> {
 }
 
 fn validate_ipv4_literal(s: &str) -> Result<()> {
-    let parts: Vec<&str> = s.split('.').collect();
-    if parts.len() != 4 {
-        return Err(Error::InvalidConnectUdpRequest {
-            field: "target_host",
-            message: "IPv4 address must have four octets".into(),
-        });
-    }
-    for part in &parts {
-        if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(Error::InvalidConnectUdpRequest {
-                field: "target_host",
-                message: format!("IPv4 octet '{part}' is not numeric"),
-            });
-        }
-        if part.parse::<u8>().is_err() {
-            return Err(Error::InvalidConnectUdpRequest {
-                field: "target_host",
-                message: format!("IPv4 octet '{part}' is out of range"),
-            });
-        }
-    }
+    Ipv4Addr::from_str(s).map_err(|_| Error::InvalidConnectUdpRequest {
+        field: "target_host",
+        message: format!("'{s}' is not a valid IPv4 address"),
+    })?;
     Ok(())
 }
 
 fn validate_ipv6_literal(s: &str) -> Result<()> {
-    if s.is_empty() {
-        return Err(Error::InvalidConnectUdpRequest {
-            field: "target_host",
-            message: "IPv6 literal must not be empty".into(),
-        });
-    }
-    if !s
-        .chars()
-        .all(|c| c.is_ascii_hexdigit() || matches!(c, ':' | '.'))
-    {
-        return Err(Error::InvalidConnectUdpRequest {
-            field: "target_host",
-            message: "IPv6 literal contains invalid characters".into(),
-        });
-    }
+    Ipv6Addr::from_str(s).map_err(|_| Error::InvalidConnectUdpRequest {
+        field: "target_host",
+        message: format!("'{s}' is not a valid IPv6 address"),
+    })?;
     Ok(())
 }
 
@@ -881,6 +863,19 @@ mod tests {
     }
 
     #[test]
+    fn to_uri_rejects_invalid_ipv6_proxy_authority() {
+        let req = ConnectUdpRequest::new("target.example", 53, None::<String>).unwrap();
+        let err = req.to_uri("[:::]:443").unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConnectUdpRequest {
+                field: "proxy_authority",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn to_uri_rejects_too_long_generated_uri() {
         let config = "&".repeat(MAX_UDP_PROXY_CONFIG_LEN);
         let req = ConnectUdpRequest::new("example.com", 53, Some(config)).unwrap();
@@ -1035,6 +1030,36 @@ mod tests {
             err,
             Error::InvalidConnectUdpRequest {
                 field: "authority",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn from_uri_rejects_authority_without_port() {
+        let err = ConnectUdpRequest::from_uri(
+            "https://proxy.example/masque?target_host=target.example&target_port=53",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConnectUdpRequest {
+                field: "authority",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn from_uri_rejects_invalid_ipv6_target_host() {
+        let err = ConnectUdpRequest::from_uri(
+            "https://proxy.example:443/masque?target_host=%5B%3A%3A%3A%5D&target_port=53",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConnectUdpRequest {
+                field: "target_host",
                 ..
             }
         ));
