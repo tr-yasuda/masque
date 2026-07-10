@@ -43,14 +43,18 @@ masque/
 │       │   ├── lib.rs              # Crate root; re-exports public API
 │       │   ├── capsule.rs          # Capsule Protocol message parser
 │       │   ├── capsule_protocol.rs # Capsule-Protocol header helper
+│       │   ├── client.rs           # HTTP/3 client (requires `h3` feature)
 │       │   ├── config.rs           # Config validation and parsing
 │       │   ├── datagram.rs         # HTTP/3 Datagram payload types
 │       │   ├── datagram_capsule.rs # DATAGRAM capsule encoder/decoder
 │       │   ├── error.rs            # Error enum and Result type
 │       │   ├── quic_varint.rs      # QUIC variable-length integer helpers
+│       │   ├── server.rs           # HTTP/3 server (requires `h3` feature)
 │       │   ├── settings.rs         # HTTP/3 settings constants and validation
+│       │   ├── tls.rs              # TLS helpers (requires `h3`; self-signed cert helpers require `test-utils`)
 │       │   └── types.rs            # Protocol / Session types
 │       ├── tests/
+│       │   ├── h3_connection.rs    # HTTP/3 integration tests (requires `h3`/`test-utils`)
 │       │   └── integration_test.rs
 │       └── examples/
 │           ├── connect_udp_proxy.rs
@@ -70,21 +74,28 @@ masque/
 
 ### `crates/masque`
 
-The main library. It currently has no external dependencies and is marked
-`publish = false`. Public modules:
+The main library. It is marked `publish = false`. Default builds have no
+external dependencies. The optional `h3` feature adds `quinn`, `h3`, `h3-quinn`,
+`rustls`, `tokio`, and `bytes`. Public modules:
 
 - `capsule` — Capsule Protocol message format, types, and streaming parser.
 - `capsule_protocol` — `Capsule-Protocol` header constant, parser, and
   serializer.
+- `client` — HTTP/3 client scaffolding (`H3Client`), gated by the `h3` feature.
 - `config` — `Config` with validated `SocketAddr` bind/peer addresses.
 - `datagram` — HTTP/3 Datagram payload types and encoding/decoding.
 - `datagram_capsule` — DATAGRAM capsule encoder/decoder.
 - `error` — `Error` enum (`InvalidConfig`, `InvalidVarInt`, `NotImplemented`,
-  `H3DatagramSetting`, `H3SettingsConflict`, `H3DatagramError`) and `Result`
-  alias.
+  `Transport`, `InvalidCertificate`, `H3DatagramSetting`, `H3SettingsConflict`,
+  `H3DatagramError`) and `Result` alias.
 - `quic_varint` — QUIC variable-length integer encoding and decoding.
+- `server` — HTTP/3 server scaffolding (`H3Server`, `H3Connection`), gated by
+  the `h3` feature.
 - `settings` — HTTP/3 setting constants such as `SETTINGS_H3_DATAGRAM`, the
   `H3DatagramSettingValue` newtype, and validation helpers.
+- `tls` — TLS helpers. `H3_ALPN` is available when the `h3` feature is enabled;
+  the self-signed certificate and verification-skipping helpers are gated by
+  the `test-utils` feature.
 - `types` — `Protocol` enum (`ConnectUdp`, `ConnectIp`, `ConnectEthernet`) and
   `Session`, which tracks negotiated capabilities such as HTTP/3 Datagrams.
 
@@ -97,12 +108,15 @@ A tiny development-task runner. It is invoked via the alias defined in
 `.cargo/config.toml`:
 
 ```bash
-cargo xtask ci      # run fmt, clippy, doc, and test
-cargo xtask fmt     # cargo fmt --all -- --check
-cargo xtask clippy  # cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo xtask doc     # cargo doc --workspace --no-deps --document-private-items --locked (RUSTDOCFLAGS=-D warnings)
-cargo xtask test    # cargo test --workspace --locked
-cargo xtask help    # print usage
+cargo xtask ci          # run fmt, clippy, doc, and test (with and without the h3 feature)
+cargo xtask fmt         # cargo fmt --all -- --check
+cargo xtask clippy      # cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo xtask clippy-h3   # cargo clippy --workspace --all-targets --features masque/h3,masque/test-utils --locked -- -D warnings
+cargo xtask doc         # cargo doc --workspace --no-deps --document-private-items --locked (RUSTDOCFLAGS=-D warnings)
+cargo xtask doc-h3      # cargo doc --workspace --no-deps --document-private-items --features masque/h3,masque/test-utils --locked (RUSTDOCFLAGS=-D warnings)
+cargo xtask test        # cargo test --workspace --locked
+cargo xtask test-h3     # cargo test --workspace --features masque/h3,masque/test-utils --locked
+cargo xtask help        # print usage
 ```
 
 ## Build and test commands
@@ -114,14 +128,23 @@ root unless noted otherwise.
 # Run all workspace tests
 cargo test --workspace --locked
 
+# Run tests with the HTTP/3 transport scaffolding
+cargo test --workspace --features masque/h3,masque/test-utils --locked
+
 # Check formatting
 cargo fmt --all -- --check
 
 # Run clippy with warnings treated as errors
 cargo clippy --workspace --all-targets --locked -- -D warnings
 
+# Run clippy with the HTTP/3 feature (including test-utils so all h3 code is linted)
+cargo clippy --workspace --all-targets --features masque/h3,masque/test-utils --locked -- -D warnings
+
 # Build documentation; rustdoc warnings are errors
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --locked
+
+# Build documentation with the HTTP/3 feature (including test-utils so all h3 docs are checked)
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --features masque/h3,masque/test-utils --locked
 
 # Run the full development helper
 cargo xtask ci
@@ -217,16 +240,18 @@ changes to example output may affect that test.
 
 ## Planned architecture and dependencies
 
-The library is designed to delegate QUIC and HTTP/3 to established crates.
-Candidate dependencies under evaluation (not yet added):
+The library delegates QUIC and HTTP/3 to established crates. When the optional
+`h3` feature is enabled, the following dependencies are used:
 
 - `quinn` — async QUIC on `rustls` and `tokio`.
-- `h3` / `h3-quinn` — HTTP/3 client/server over Quinn.
+- `h3` / `h3-quinn` — HTTP/3 client/server over Quinn (`h3-quinn` is pinned to
+  `0.0.10` because `0.0.8` is incompatible with `quinn` `0.11.11`).
 - `rustls` — TLS 1.3 for QUIC handshakes.
 - `tokio` — async runtime for examples and proxy demos.
+- `rcgen` — self-signed certificate generation for the `test-utils` feature.
+- `bytes` — byte buffer type used by the `h3` request/response bodies.
 
-No HTTP/3 or QUIC dependencies are present yet. The first step is to stabilize
-core types and example structure before integrating transport crates.
+Default builds do not include HTTP/3 or QUIC dependencies.
 
 ## Roadmap (from `README.md`)
 
@@ -248,5 +273,7 @@ Run the full CI helper and fix any failures:
 cargo xtask ci
 ```
 
-This is equivalent to running `cargo fmt --check`, `cargo clippy`,
-`cargo doc` with `RUSTDOCFLAGS=-D warnings`, and `cargo test`.
+This runs `cargo fmt --check`, `cargo clippy` (with and without `--features
+masque/h3,masque/test-utils`), `cargo doc` with `RUSTDOCFLAGS=-D warnings` (with and without
+`--features masque/h3,masque/test-utils`), and `cargo test` (with `--features masque/h3,masque/test-utils`
+and without any feature).
