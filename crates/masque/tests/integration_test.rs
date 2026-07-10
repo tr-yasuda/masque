@@ -13,10 +13,11 @@ use std::time::Duration;
 
 use masque::quic_varint::{self, MAX_VARINT};
 use masque::{
-    CAPSULE_PROTOCOL, Capsule, CapsuleParser, CapsuleProtocolError, CapsuleType, Config,
-    DatagramCapsule, DatagramPayload, Error, H3DatagramErrorKind, H3DatagramSettingValue,
-    HttpDatagram, Protocol, SETTINGS_H3_DATAGRAM, Session, VarIntErrorKind, parse_capsule_protocol,
-    serialize_capsule_protocol, validate_h3_datagram_setting_value,
+    CAPSULE_PROTOCOL, CONNECT_UDP_METHOD, Capsule, CapsuleParser, CapsuleProtocolError,
+    CapsuleType, Config, ConnectUdpRequest, DatagramCapsule, DatagramPayload, Error,
+    H3DatagramErrorKind, H3DatagramSettingValue, HttpDatagram, Protocol, SETTINGS_H3_DATAGRAM,
+    Session, VarIntErrorKind, parse_capsule_protocol, serialize_capsule_protocol,
+    validate_h3_datagram_setting_value,
 };
 
 /// RAII guard that kills a spawned child process when dropped.
@@ -657,4 +658,36 @@ fn datagram_capsule_rejects_truncated_value_from_public_api() {
             ..
         }
     ));
+}
+
+#[test]
+fn connect_udp_request_round_trips_through_public_api() {
+    let req = ConnectUdpRequest::new("target.example", 53, Some("cfg")).unwrap();
+    assert_eq!(req.target_host(), "target.example");
+    assert_eq!(req.target_port(), 53);
+    assert_eq!(req.udp_proxy_config(), Some("cfg"));
+
+    let uri = req.to_uri("proxy.example:443");
+    let parsed = ConnectUdpRequest::from_uri(&uri).unwrap();
+    assert_eq!(parsed.target_host(), "target.example");
+    assert_eq!(parsed.target_port(), 53);
+    assert_eq!(parsed.udp_proxy_config(), Some("cfg"));
+}
+
+#[test]
+fn connect_udp_method_constant_is_accessible_at_crate_root() {
+    assert_eq!(CONNECT_UDP_METHOD, "CONNECT-UDP");
+}
+
+#[test]
+fn connect_udp_request_rejects_invalid_port_from_public_api() {
+    let err = ConnectUdpRequest::new("target.example", 0, None::<String>).unwrap_err();
+    assert!(err.to_string().contains("target_port"));
+}
+
+#[test]
+fn connect_udp_request_rejects_missing_target_host_from_public_api() {
+    let err =
+        ConnectUdpRequest::from_uri("https://proxy.example:443/masque?target_port=53").unwrap_err();
+    assert!(err.to_string().contains("target_host"));
 }
