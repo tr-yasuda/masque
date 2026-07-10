@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use masque::quic_varint::{self, MAX_VARINT};
 use masque::{
-    CAPSULE_PROTOCOL, CONNECT_UDP_METHOD, Capsule, CapsuleParser, CapsuleProtocolError,
+    CAPSULE_PROTOCOL, CONNECT_UDP_PROTOCOL, Capsule, CapsuleParser, CapsuleProtocolError,
     CapsuleType, Config, ConnectUdpRequest, DatagramCapsule, DatagramPayload, Error,
     H3DatagramErrorKind, H3DatagramSettingValue, HttpDatagram, Protocol, SETTINGS_H3_DATAGRAM,
     Session, VarIntErrorKind, parse_capsule_protocol, serialize_capsule_protocol,
@@ -669,8 +669,8 @@ fn connect_udp_request_exposes_public_api() {
 }
 
 #[test]
-fn connect_udp_method_constant_is_accessible_at_crate_root() {
-    assert_eq!(CONNECT_UDP_METHOD, "CONNECT-UDP");
+fn connect_udp_protocol_constant_is_accessible_at_crate_root() {
+    assert_eq!(CONNECT_UDP_PROTOCOL, "connect-udp");
 }
 
 #[test]

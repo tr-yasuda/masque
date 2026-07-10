@@ -29,8 +29,6 @@ h3 = [
 test-utils = ["h3", "dep:rcgen"]
 
 [dependencies]
-# Percent-encoding for CONNECT-UDP URI template query values.
-percent-encoding = "2.3.1"
 # QUIC transport. Required by the optional `h3` feature.
 quinn = { version = "0.11", optional = true }
 # HTTP/3 implementation. Required by the optional `h3` feature.

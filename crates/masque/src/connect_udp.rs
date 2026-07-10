@@ -1,7 +1,7 @@
 //! CONNECT-UDP request type and URI template helpers.
 //!
-//! This module implements the request target URI template from RFC 9298
-//! Section 3.1:
+//! This module implements the request target URI template used by CONNECT-UDP
+//! (RFC 9298). RFC 9298 Section 2 defines the template as:
 //!
 //! ```text
 //! https://<proxy>:<port>/masque?target_host=<target>&target_port=<port>
@@ -10,13 +10,19 @@
 //! An optional `udp_proxy_config` query parameter may also be present. Query
 //! parameter values are percent-encoded on generation and percent-decoded on
 //! parsing so that arbitrary valid values round-trip correctly.
+//!
+//! Note: the HTTP/2 and HTTP/3 `:method` pseudo-header for CONNECT-UDP is
+//! `"CONNECT"` and the `:protocol` pseudo-header is `"connect-udp"`. For
+//! HTTP/1.1 the method is `"GET"` with an `Upgrade: connect-udp` header. The
+//! constant exported by this module is the protocol token, not a method name.
 
-use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, percent_encode};
+use std::fmt::Write as _;
 
 use crate::{Error, Result};
 
-/// The HTTP method used for CONNECT-UDP requests per RFC 9298.
-pub const CONNECT_UDP_METHOD: &str = "CONNECT-UDP";
+/// The HTTP `:protocol` pseudo-header value used for CONNECT-UDP requests per
+/// RFC 9298.
+pub const CONNECT_UDP_PROTOCOL: &str = "connect-udp";
 
 /// Maximum length of a `target_host` value in bytes.
 const MAX_TARGET_HOST_LEN: usize = 253;
@@ -27,11 +33,15 @@ const MAX_UDP_PROXY_CONFIG_LEN: usize = 4096;
 /// Maximum length of an input URI in bytes.
 const MAX_URI_LEN: usize = 8192;
 
+/// Maximum length of a proxy authority (`host:port` or `[ipv6]:port`) in bytes.
+const MAX_PROXY_AUTHORITY_LEN: usize = 1024;
+
 /// A parsed CONNECT-UDP request per RFC 9298.
 ///
 /// The request target is represented by the RFC 9298 URI template. The fields
-/// are validated at construction time: `target_host` must be a non-empty
-/// trimmed string and `target_port` must be in the range `1..=65535`.
+/// are validated at construction time: `target_host` must be a non-empty,
+/// syntactically valid host or IP literal and `target_port` must be in the
+/// range `1..=65535`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectUdpRequest {
     target_host: String,
@@ -44,9 +54,9 @@ impl ConnectUdpRequest {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidConnectUdpRequest`] if `target_host` is empty or
-    /// only whitespace, if it exceeds the maximum host length, or if
-    /// `target_port` is zero.
+    /// Returns [`Error::InvalidConnectUdpRequest`] if `target_host` is empty,
+    /// only whitespace, syntactically invalid, too long, or if `target_port`
+    /// is zero.
     pub fn new(
         target_host: impl Into<String>,
         target_port: u16,
@@ -68,10 +78,11 @@ impl ConnectUdpRequest {
 
     /// Parse a CONNECT-UDP request from an RFC 9298 URI template.
     ///
-    /// The URI must use the `https` scheme, contain the `/masque` path exactly,
-    /// and include the query parameters `target_host` and `target_port`. An
-    /// optional `udp_proxy_config` parameter is also recognized. Query values
-    /// are percent-decoded before validation.
+    /// The URI must use the `https` scheme, contain the `/masque` path exactly
+    /// (after normalizing percent-encoded unreserved characters), and include
+    /// the query parameters `target_host` and `target_port`. An optional
+    /// `udp_proxy_config` parameter is also recognized. Query values are
+    /// percent-decoded before validation.
     ///
     /// # Errors
     ///
@@ -87,10 +98,15 @@ impl ConnectUdpRequest {
             });
         }
 
+        if uri.contains('#') {
+            return Err(Error::InvalidConnectUdpRequest {
+                field: "fragment",
+                message: "URI must not contain a fragment".into(),
+            });
+        }
+
         validate_scheme(uri)?;
 
-        // Strip the fragment component before parsing the rest of the URI.
-        let uri = uri.split_once('#').map(|(before, _)| before).unwrap_or(uri);
         let after_scheme = &uri["https://".len()..];
 
         let (authority, path_and_query) =
@@ -108,15 +124,22 @@ impl ConnectUdpRequest {
             });
         }
 
-        // The path must be exactly `/masque` (optionally followed by `?...`).
-        if !(path_and_query == "masque" || path_and_query.starts_with("masque?")) {
+        if authority.contains('@') {
+            return Err(Error::InvalidConnectUdpRequest {
+                field: "authority",
+                message: "URI authority must not contain userinfo".into(),
+            });
+        }
+
+        let (path, query) = path_and_query
+            .split_once('?')
+            .unwrap_or((path_and_query, ""));
+        if normalize_path_segment(path)? != "masque" {
             return Err(Error::InvalidConnectUdpRequest {
                 field: "path",
                 message: "URI path must be '/masque'".into(),
             });
         }
-
-        let query = path_and_query.strip_prefix("masque?").unwrap_or("");
 
         let mut target_host: Option<String> = None;
         let mut target_port: Option<u16> = None;
@@ -130,10 +153,18 @@ impl ConnectUdpRequest {
                 pair.split_once('=')
                     .ok_or_else(|| Error::InvalidConnectUdpRequest {
                         field: "query",
-                        message: "query parameter is missing '='".into(),
+                        message: format!("query parameter '{pair}' is missing '='"),
                     })?;
 
-            let value = decode_query_value(value)?;
+            let value = decode_query_value(value).map_err(|e| match e {
+                Error::InvalidConnectUdpRequest { message, .. } => {
+                    Error::InvalidConnectUdpRequest {
+                        field: "query",
+                        message: format!("query parameter '{key}' {message}"),
+                    }
+                }
+                other => other,
+            })?;
 
             match key {
                 "target_host" => {
@@ -152,13 +183,7 @@ impl ConnectUdpRequest {
                             message: "duplicate query parameter 'target_port'".into(),
                         });
                     }
-                    let port =
-                        value
-                            .parse::<u16>()
-                            .map_err(|_| Error::InvalidConnectUdpRequest {
-                                field: "target_port",
-                                message: "target_port is not a valid port number".into(),
-                            })?;
+                    let port = parse_target_port(&value)?;
                     validate_target_port(port)?;
                     target_port = Some(port);
                 }
@@ -174,7 +199,7 @@ impl ConnectUdpRequest {
                 _ => {
                     return Err(Error::InvalidConnectUdpRequest {
                         field: "query",
-                        message: "unknown query parameter".into(),
+                        message: format!("unknown query parameter '{key}'"),
                     });
                 }
             }
@@ -199,23 +224,30 @@ impl ConnectUdpRequest {
 
     /// Generate the RFC 9298 URI for this request.
     ///
-    /// `proxy_authority` is the proxy host and port, e.g. `proxy.example:443`.
+    /// `proxy_authority` is the proxy host and port, e.g. `proxy.example:443`
+    /// or `[::1]:443`.
     ///
     /// # Errors
     ///
     /// Returns [`Error::InvalidConnectUdpRequest`] if `proxy_authority` is empty
-    /// or contains characters that would produce an invalid URI.
+    /// or not a valid `host:port` / `[ipv6]:port` authority.
     #[must_use = "the generated URI should be used or handled"]
     pub fn to_uri(&self, proxy_authority: &str) -> Result<String> {
         validate_proxy_authority(proxy_authority)?;
-        let host = percent_encode(self.target_host.as_bytes(), NON_ALPHANUMERIC).to_string();
+        let host = encode_query_value(&self.target_host);
         let port = self.target_port;
         let mut uri =
             format!("https://{proxy_authority}/masque?target_host={host}&target_port={port}");
         if let Some(config) = &self.udp_proxy_config {
-            let config = percent_encode(config.as_bytes(), NON_ALPHANUMERIC).to_string();
+            let config = encode_query_value(config);
             uri.push_str("&udp_proxy_config=");
             uri.push_str(&config);
+        }
+        if uri.len() > MAX_URI_LEN {
+            return Err(Error::InvalidConnectUdpRequest {
+                field: "uri",
+                message: "generated URI is too long".into(),
+            });
         }
         Ok(uri)
     }
@@ -268,6 +300,13 @@ fn validate_target_host(host: impl Into<String>) -> Result<String> {
             message: "target_host is too long".into(),
         });
     }
+    if has_control_character(trimmed) {
+        return Err(Error::InvalidConnectUdpRequest {
+            field: "target_host",
+            message: "target_host contains control characters".into(),
+        });
+    }
+    validate_host(trimmed)?;
     Ok(trimmed.to_string())
 }
 
@@ -289,6 +328,12 @@ fn validate_udp_proxy_config(config: impl Into<String>) -> Result<String> {
             message: "udp_proxy_config is too long".into(),
         });
     }
+    if has_control_character(&config) {
+        return Err(Error::InvalidConnectUdpRequest {
+            field: "udp_proxy_config",
+            message: "udp_proxy_config contains control characters".into(),
+        });
+    }
     Ok(config)
 }
 
@@ -299,32 +344,299 @@ fn validate_proxy_authority(authority: &str) -> Result<()> {
             message: "must not be empty".into(),
         });
     }
-    if authority.len() > MAX_TARGET_HOST_LEN {
+    if authority.len() > MAX_PROXY_AUTHORITY_LEN {
         return Err(Error::InvalidConnectUdpRequest {
             field: "proxy_authority",
             message: "proxy_authority is too long".into(),
         });
     }
-    if authority
-        .chars()
-        .any(|c| matches!(c, '/' | '?' | '#' | '@' | ' ' | '\t' | '\r' | '\n'))
-    {
+    if has_control_character(authority) {
         return Err(Error::InvalidConnectUdpRequest {
             field: "proxy_authority",
-            message: "proxy_authority contains invalid characters".into(),
+            message: "proxy_authority contains control characters".into(),
+        });
+    }
+
+    let (host, port_str) = if authority.starts_with('[') {
+        let Some((host, port)) = authority.rsplit_once(':') else {
+            return Err(Error::InvalidConnectUdpRequest {
+                field: "proxy_authority",
+                message: "IPv6 authority must be '[ipv6]:port'".into(),
+            });
+        };
+        if !host.ends_with(']') {
+            return Err(Error::InvalidConnectUdpRequest {
+                field: "proxy_authority",
+                message: "IPv6 authority must end with ']'".into(),
+            });
+        }
+        let inner = &host[1..host.len() - 1];
+        validate_ipv6_literal(inner).map_err(map_host_error_to_proxy_authority)?;
+        (inner, port)
+    } else {
+        let Some((host, port)) = authority.rsplit_once(':') else {
+            return Err(Error::InvalidConnectUdpRequest {
+                field: "proxy_authority",
+                message: "proxy_authority must be 'host:port'".into(),
+            });
+        };
+        if host.is_empty() {
+            return Err(Error::InvalidConnectUdpRequest {
+                field: "proxy_authority",
+                message: "proxy_authority host must not be empty".into(),
+            });
+        }
+        validate_host(host).map_err(map_host_error_to_proxy_authority)?;
+        (host, port)
+    };
+
+    if port_str.is_empty() {
+        return Err(Error::InvalidConnectUdpRequest {
+            field: "proxy_authority",
+            message: "proxy_authority port must not be empty".into(),
+        });
+    }
+    if !port_str.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(Error::InvalidConnectUdpRequest {
+            field: "proxy_authority",
+            message: format!("proxy_authority port '{port_str}' is not numeric"),
+        });
+    }
+    let port = port_str
+        .parse::<u16>()
+        .map_err(|_| Error::InvalidConnectUdpRequest {
+            field: "proxy_authority",
+            message: format!("proxy_authority port '{port_str}' is out of range"),
+        })?;
+    if port == 0 {
+        return Err(Error::InvalidConnectUdpRequest {
+            field: "proxy_authority",
+            message: "proxy_authority port must not be zero".into(),
+        });
+    }
+
+    // `host` is unused after validation, but suppress the unused warning.
+    let _ = host;
+    Ok(())
+}
+
+fn map_host_error_to_proxy_authority(err: Error) -> Error {
+    match err {
+        Error::InvalidConnectUdpRequest { message, .. } => Error::InvalidConnectUdpRequest {
+            field: "proxy_authority",
+            message,
+        },
+        other => other,
+    }
+}
+
+fn validate_host(host: &str) -> Result<()> {
+    // IPv6 bracket literal.
+    if host.starts_with('[') && host.ends_with(']') {
+        return validate_ipv6_literal(&host[1..host.len() - 1]);
+    }
+
+    // IPv4 literal.
+    if host.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+        return validate_ipv4_literal(host);
+    }
+
+    // Registered name: unreserved / sub-delims per RFC 3986.
+    if !host.chars().all(is_valid_reg_name_char) {
+        return Err(Error::InvalidConnectUdpRequest {
+            field: "target_host",
+            message: "target_host contains invalid characters".into(),
         });
     }
     Ok(())
 }
 
-fn decode_query_value(value: &str) -> Result<String> {
-    percent_decode_str(value)
-        .decode_utf8()
-        .map(|cow| cow.into_owned())
+fn validate_ipv4_literal(s: &str) -> Result<()> {
+    let parts: Vec<&str> = s.split('.').collect();
+    if parts.len() != 4 {
+        return Err(Error::InvalidConnectUdpRequest {
+            field: "target_host",
+            message: "IPv4 address must have four octets".into(),
+        });
+    }
+    for part in &parts {
+        if part.is_empty() || !part.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(Error::InvalidConnectUdpRequest {
+                field: "target_host",
+                message: format!("IPv4 octet '{part}' is not numeric"),
+            });
+        }
+        if part.parse::<u8>().is_err() {
+            return Err(Error::InvalidConnectUdpRequest {
+                field: "target_host",
+                message: format!("IPv4 octet '{part}' is out of range"),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_ipv6_literal(s: &str) -> Result<()> {
+    if s.is_empty() {
+        return Err(Error::InvalidConnectUdpRequest {
+            field: "target_host",
+            message: "IPv6 literal must not be empty".into(),
+        });
+    }
+    if !s
+        .chars()
+        .all(|c| c.is_ascii_hexdigit() || matches!(c, ':' | '.'))
+    {
+        return Err(Error::InvalidConnectUdpRequest {
+            field: "target_host",
+            message: "IPv6 literal contains invalid characters".into(),
+        });
+    }
+    Ok(())
+}
+
+fn is_valid_reg_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(
+            c,
+            '-' | '.'
+                | '_'
+                | '~'
+                | '!'
+                | '$'
+                | '&'
+                | '\''
+                | '('
+                | ')'
+                | '*'
+                | '+'
+                | ','
+                | ';'
+                | '='
+        )
+}
+
+fn has_control_character(s: &str) -> bool {
+    s.bytes().any(|b| b < 0x20 || b == 0x7F)
+}
+
+fn parse_target_port(value: &str) -> Result<u16> {
+    if !value.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(Error::InvalidConnectUdpRequest {
+            field: "target_port",
+            message: format!("target_port '{value}' is not a valid port number"),
+        });
+    }
+    value
+        .parse::<u16>()
         .map_err(|_| Error::InvalidConnectUdpRequest {
-            field: "query",
-            message: "query value is not valid UTF-8".into(),
+            field: "target_port",
+            message: format!("target_port '{value}' is out of range"),
         })
+}
+
+fn encode_query_value(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for &b in input.as_bytes() {
+        if is_unreserved(b) {
+            out.push(char::from(b));
+        } else {
+            let _ = write!(out, "%{b:02X}");
+        }
+    }
+    out
+}
+
+fn decode_query_value(value: &str) -> Result<String> {
+    if !value.bytes().any(|b| b == b'%') {
+        return Ok(value.to_string());
+    }
+
+    let mut out = Vec::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return Err(Error::InvalidConnectUdpRequest {
+                    field: "query",
+                    message: "has an incomplete percent-encoding sequence".into(),
+                });
+            }
+            let hi = hex_value(bytes[i + 1]).ok_or_else(|| Error::InvalidConnectUdpRequest {
+                field: "query",
+                message: "has an invalid percent-encoding sequence".into(),
+            })?;
+            let lo = hex_value(bytes[i + 2]).ok_or_else(|| Error::InvalidConnectUdpRequest {
+                field: "query",
+                message: "has an invalid percent-encoding sequence".into(),
+            })?;
+            out.push((hi << 4) | lo);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| Error::InvalidConnectUdpRequest {
+        field: "query",
+        message: "is not valid UTF-8".into(),
+    })
+}
+
+fn normalize_path_segment(segment: &str) -> Result<String> {
+    if !segment.bytes().any(|b| b == b'%') {
+        return Ok(segment.to_string());
+    }
+
+    let mut out = Vec::with_capacity(segment.len());
+    let bytes = segment.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' {
+            if i + 2 >= bytes.len() {
+                return Err(Error::InvalidConnectUdpRequest {
+                    field: "path",
+                    message: "path has an incomplete percent-encoding sequence".into(),
+                });
+            }
+            let hi = hex_value(bytes[i + 1]).ok_or_else(|| Error::InvalidConnectUdpRequest {
+                field: "path",
+                message: "path has an invalid percent-encoding sequence".into(),
+            })?;
+            let lo = hex_value(bytes[i + 2]).ok_or_else(|| Error::InvalidConnectUdpRequest {
+                field: "path",
+                message: "path has an invalid percent-encoding sequence".into(),
+            })?;
+            let decoded = (hi << 4) | lo;
+            if is_unreserved(decoded) {
+                out.push(decoded);
+            } else {
+                out.extend_from_slice(&bytes[i..i + 3]);
+            }
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| Error::InvalidConnectUdpRequest {
+        field: "path",
+        message: "path is not valid UTF-8".into(),
+    })
+}
+
+fn is_unreserved(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')
+}
+
+fn hex_value(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -385,10 +697,6 @@ mod tests {
                 ..
             }
         ));
-        assert_eq!(
-            err.to_string(),
-            "invalid CONNECT-UDP request for target_port: must not be zero"
-        );
     }
 
     #[test]
@@ -412,6 +720,54 @@ mod tests {
             err,
             Error::InvalidConnectUdpRequest {
                 field: "udp_proxy_config",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn request_rejects_control_character_in_target_host() {
+        let err = ConnectUdpRequest::new("evil\0.com", 443, None::<String>).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConnectUdpRequest {
+                field: "target_host",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn request_rejects_control_character_in_udp_proxy_config() {
+        let err = ConnectUdpRequest::new("example.com", 443, Some("cfg\0")).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConnectUdpRequest {
+                field: "udp_proxy_config",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn request_accepts_ipv4_target_host() {
+        let req = ConnectUdpRequest::new("192.0.2.1", 53, None::<String>).unwrap();
+        assert_eq!(req.target_host(), "192.0.2.1");
+    }
+
+    #[test]
+    fn request_accepts_ipv6_target_host() {
+        let req = ConnectUdpRequest::new("[::1]", 53, None::<String>).unwrap();
+        assert_eq!(req.target_host(), "[::1]");
+    }
+
+    #[test]
+    fn request_rejects_invalid_target_host() {
+        let err = ConnectUdpRequest::new("foo/bar", 53, None::<String>).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConnectUdpRequest {
+                field: "target_host",
                 ..
             }
         ));
@@ -456,16 +812,83 @@ mod tests {
     }
 
     #[test]
+    fn to_uri_leaves_unreserved_characters_unencoded() {
+        let req = ConnectUdpRequest::new("target.example", 53, None::<String>).unwrap();
+        let uri = req.to_uri("proxy.example:443").unwrap();
+        assert_eq!(
+            uri,
+            "https://proxy.example:443/masque?target_host=target.example&target_port=53"
+        );
+    }
+
+    #[test]
     fn to_uri_encodes_reserved_characters() {
         let req = ConnectUdpRequest::new("a&b.com", 53, Some("c=d#e")).unwrap();
         let uri = req.to_uri("proxy.example:443").unwrap();
         assert_eq!(
             uri,
-            "https://proxy.example:443/masque?target_host=a%26b%2Ecom&target_port=53&udp_proxy_config=c%3Dd%23e"
+            "https://proxy.example:443/masque?target_host=a%26b.com&target_port=53&udp_proxy_config=c%3Dd%23e"
         );
         let parsed = ConnectUdpRequest::from_uri(&uri).unwrap();
         assert_eq!(parsed.target_host(), "a&b.com");
         assert_eq!(parsed.udp_proxy_config(), Some("c=d#e"));
+    }
+
+    #[test]
+    fn to_uri_accepts_ipv6_proxy_authority() {
+        let req = ConnectUdpRequest::new("target.example", 53, None::<String>).unwrap();
+        let uri = req.to_uri("[::1]:443").unwrap();
+        assert!(uri.starts_with("https://[::1]:443/masque?"));
+    }
+
+    #[test]
+    fn to_uri_rejects_proxy_authority_without_port() {
+        let req = ConnectUdpRequest::new("target.example", 53, None::<String>).unwrap();
+        let err = req.to_uri("proxy.example").unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConnectUdpRequest {
+                field: "proxy_authority",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn to_uri_rejects_proxy_authority_with_userinfo() {
+        let req = ConnectUdpRequest::new("target.example", 53, None::<String>).unwrap();
+        let err = req.to_uri("user:pass@proxy.example:443").unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConnectUdpRequest {
+                field: "proxy_authority",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn to_uri_rejects_proxy_authority_with_percent_encoding() {
+        let req = ConnectUdpRequest::new("target.example", 53, None::<String>).unwrap();
+        let err = req.to_uri("user%40proxy.example:443").unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConnectUdpRequest {
+                field: "proxy_authority",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn to_uri_rejects_too_long_generated_uri() {
+        let config = "&".repeat(MAX_UDP_PROXY_CONFIG_LEN);
+        let req = ConnectUdpRequest::new("example.com", 53, Some(config)).unwrap();
+        let err = req.to_uri("proxy.example:443").unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConnectUdpRequest { field: "uri", .. }
+        ));
     }
 
     #[test]
@@ -524,6 +947,22 @@ mod tests {
                 ..
             }
         ));
+        assert!(err.to_string().contains("abc"));
+    }
+
+    #[test]
+    fn from_uri_rejects_plus_target_port() {
+        let err = ConnectUdpRequest::from_uri(
+            "https://proxy.example:443/masque?target_host=target.example&target_port=+53",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConnectUdpRequest {
+                field: "target_port",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -572,6 +1011,36 @@ mod tests {
     }
 
     #[test]
+    fn from_uri_rejects_empty_authority() {
+        let err = ConnectUdpRequest::from_uri(
+            "https:///masque?target_host=target.example&target_port=53",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConnectUdpRequest {
+                field: "authority",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn from_uri_rejects_authority_with_userinfo() {
+        let err = ConnectUdpRequest::from_uri(
+            "https://user:pass@proxy.example:443/masque?target_host=target.example&target_port=53",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConnectUdpRequest {
+                field: "authority",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn from_uri_rejects_missing_masque_path() {
         let err = ConnectUdpRequest::from_uri(
             "https://proxy.example:443/other?target_host=target.example&target_port=53",
@@ -608,9 +1077,34 @@ mod tests {
     }
 
     #[test]
+    fn from_uri_accepts_normalized_path() {
+        let req = ConnectUdpRequest::from_uri(
+            "https://proxy.example:443/%6Dasque?target_host=target.example&target_port=53",
+        )
+        .unwrap();
+        assert_eq!(req.target_host(), "target.example");
+        assert_eq!(req.target_port(), 53);
+    }
+
+    #[test]
     fn from_uri_rejects_empty_target_host() {
         let err = ConnectUdpRequest::from_uri(
             "https://proxy.example:443/masque?target_host=&target_port=53",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConnectUdpRequest {
+                field: "target_host",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn from_uri_rejects_control_character_in_target_host() {
+        let err = ConnectUdpRequest::from_uri(
+            "https://proxy.example:443/masque?target_host=evil%00.com&target_port=53",
         )
         .unwrap_err();
         assert!(matches!(
@@ -644,6 +1138,7 @@ mod tests {
             err,
             Error::InvalidConnectUdpRequest { field: "query", .. }
         ));
+        assert!(err.to_string().contains("typo"));
     }
 
     #[test]
@@ -677,13 +1172,42 @@ mod tests {
     }
 
     #[test]
-    fn from_uri_strips_fragment() {
+    fn from_uri_rejects_duplicate_udp_proxy_config() {
+        let err = ConnectUdpRequest::from_uri(
+            "https://proxy.example:443/masque?target_host=target.example&target_port=53&udp_proxy_config=cfg1&udp_proxy_config=cfg2",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConnectUdpRequest {
+                field: "udp_proxy_config",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn from_uri_accepts_empty_udp_proxy_config() {
         let req = ConnectUdpRequest::from_uri(
-            "https://proxy.example:443/masque?target_host=target.example&target_port=53#fragment",
+            "https://proxy.example:443/masque?target_host=target.example&target_port=53&udp_proxy_config=",
         )
         .unwrap();
-        assert_eq!(req.target_host(), "target.example");
-        assert_eq!(req.target_port(), 53);
+        assert_eq!(req.udp_proxy_config(), Some(""));
+    }
+
+    #[test]
+    fn from_uri_rejects_fragment() {
+        let err = ConnectUdpRequest::from_uri(
+            "https://proxy.example:443/masque?target_host=target.example&target_port=53#fragment",
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConnectUdpRequest {
+                field: "fragment",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -721,5 +1245,24 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn to_uri_rejects_long_proxy_authority() {
+        let authority = format!("{}.example.com:443", "a".repeat(MAX_PROXY_AUTHORITY_LEN));
+        let req = ConnectUdpRequest::new("target.example", 53, None::<String>).unwrap();
+        let err = req.to_uri(&authority).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConnectUdpRequest {
+                field: "proxy_authority",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn connect_udp_protocol_constant_matches_rfc9298_token() {
+        assert_eq!(CONNECT_UDP_PROTOCOL, "connect-udp");
     }
 }

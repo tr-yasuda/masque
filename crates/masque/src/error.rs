@@ -676,6 +676,10 @@ mod tests {
             Error::NotImplemented {
                 message: "CONNECT-UDP proxy".into(),
             },
+            Error::InvalidConnectUdpRequest {
+                field: "target_port",
+                message: "must not be zero".into(),
+            },
             Error::Transport {
                 kind: TransportKind::Other,
                 message: "connection refused".into(),

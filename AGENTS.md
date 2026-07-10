@@ -84,7 +84,7 @@ external dependencies. The optional `h3` feature adds `quinn`, `h3`, `h3-quinn`,
   serializer.
 - `client` — HTTP/3 client scaffolding (`H3Client`), gated by the `h3` feature.
 - `config` — `Config` with validated `SocketAddr` bind/peer addresses.
-- `connect_udp` — `ConnectUdpRequest` and `CONNECT_UDP_METHOD` for RFC 9298
+- `connect_udp` — `ConnectUdpRequest` and `CONNECT_UDP_PROTOCOL` for RFC 9298
   CONNECT-UDP request targets and URI template parsing/generation.
 - `datagram` — HTTP/3 Datagram payload types and encoding/decoding.
 - `datagram_capsule` — DATAGRAM capsule encoder/decoder.
