@@ -158,13 +158,15 @@ impl H3Connection {
     pub async fn accept_request(
         &mut self,
     ) -> Result<Option<h3::server::RequestResolver<h3_quinn::Connection, Bytes>>> {
-        self.connection.accept().await.map_err(|e| {
-            Error::transport_error(
+        match self.connection.accept().await {
+            Ok(request) => Ok(request),
+            Err(e) if e.is_h3_no_error() => Ok(None),
+            Err(e) => Err(Error::transport_error(
                 TransportKind::RequestAccept,
                 "failed to accept HTTP/3 request",
                 Some(Box::new(e)),
-            )
-        })
+            )),
+        }
     }
 }
 
