@@ -145,13 +145,20 @@ pub enum Error {
         received: u64,
     },
 
-    /// An HTTP/3 datagram or Capsule Protocol parse error occurred.
+    /// An HTTP/3 datagram or Capsule Protocol error occurred.
     ///
-    /// This corresponds to the `H3_DATAGRAM_ERROR` error code defined in
-    /// RFC 9297 Section 5.2, whose numeric value is [`H3_DATAGRAM_ERROR_CODE`].
-    /// Per RFC 9297 Sections 2.1 and 3.3, this is an HTTP/3 connection or stream
-    /// error; callers that produce this error must abort the affected request
-    /// stream or terminate the connection.
+    /// This includes parse/protocol errors that correspond to the
+    /// `H3_DATAGRAM_ERROR` error code defined in RFC 9297 Section 5.2, whose
+    /// numeric value is [`H3_DATAGRAM_ERROR_CODE`]. Per RFC 9297 Sections 2.1
+    /// and 3.3, those cases are HTTP/3 connection or stream errors; callers
+    /// that signal them to a peer must abort the affected request stream or
+    /// terminate the connection.
+    ///
+    /// This variant also carries local datagram routing or negotiation failures
+    /// (for example, [`H3DatagramErrorKind::NotNegotiated`] or
+    /// [`H3DatagramErrorKind::MismatchedStreamId`]). Those kinds do not map to
+    /// `H3_DATAGRAM_ERROR` and should be handled locally rather than signaled to
+    /// the peer.
     ///
     /// The `message` field uses [`H3DatagramErrorMessage`], which can only be
     /// constructed inside this crate. This ensures that the message is always
@@ -206,6 +213,21 @@ pub enum H3DatagramErrorKind {
     Truncated,
     /// The capsule type was not the expected DATAGRAM type.
     UnexpectedCapsuleType,
+    /// HTTP/3 Datagrams were not negotiated for this association.
+    ///
+    /// This is a local precondition failure; it does not correspond to an
+    /// `H3_DATAGRAM_ERROR` and should not be signaled to the peer.
+    NotNegotiated,
+    /// An HTTP/3 Datagram was addressed to a different request stream.
+    ///
+    /// This is a local routing failure; it does not correspond to an
+    /// `H3_DATAGRAM_ERROR` and should not be signaled to the peer.
+    MismatchedStreamId,
+    /// The CONNECT-UDP Context ID in the HTTP/3 Datagram payload is missing,
+    /// malformed, or not the default context (0).
+    InvalidContextId,
+    /// The decoded UDP payload exceeds the address-family maximum datagram size.
+    PayloadTooLarge,
 }
 
 /// A human-readable message for [`Error::H3DatagramError`].

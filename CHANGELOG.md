@@ -17,18 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failures; both variants preserve the underlying source error chain.
 - CI and `xtask` checks for the `h3` feature.
 - `Error::H3DatagramError` variant and `H3_DATAGRAM_ERROR_CODE` constant for RFC 9297 `H3_DATAGRAM_ERROR` (0x33).
-- Initial Cargo workspace with Rust 2024 edition and resolver 3.
-- `crates/masque` library crate with core types, errors, and configuration.
-- `capsule_protocol` module with the `Capsule-Protocol` header constant, parser, and serializer.
-- UDP echo client/server examples.
-- CONNECT-UDP proxy example stub with TODOs.
-- Integration test scaffold.
-- `xtask` helper for running fmt, clippy, doc, and tests.
-- GitHub Actions CI workflow.
-- README, CONTRIBUTING, SECURITY, and `LICENSE` files.
+- `H3DatagramErrorKind::NotNegotiated`, `H3DatagramErrorKind::MismatchedStreamId`,
+  `H3DatagramErrorKind::InvalidContextId`, and `H3DatagramErrorKind::PayloadTooLarge`
+  error kinds for HTTP/3 Datagram negotiation, routing, and CONNECT-UDP framing failures.
+- `UdpAssociation::request_stream_id`, `UdpAssociation::encode_h3_datagram`, and
+  `UdpAssociation::decode_h3_datagram` for mapping UDP payloads to HTTP/3
+  Datagrams addressed to the CONNECT-UDP request stream.
 
 ### Changed
 
+- `UdpAssociation::bind` now requires a `stream_id: u64` argument. This is a
+  breaking change; callers must supply the CONNECT-UDP request stream
+  identifier. The identifier is validated as a client-initiated bidirectional
+  QUIC stream ID before the UDP socket is bound.
 - `Error` enum variants are no longer feature-gated: `Transport` and
   `InvalidCertificate` are always present so the enum shape does not depend on
   Cargo feature unification.
