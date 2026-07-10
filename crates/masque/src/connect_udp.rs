@@ -309,7 +309,7 @@ fn validate_target_host(host: impl Into<String>) -> Result<String> {
             message: "target_host contains control characters".into(),
         });
     }
-    validate_host(trimmed)?;
+    validate_host("target_host", trimmed)?;
     Ok(trimmed.to_string())
 }
 
@@ -382,7 +382,7 @@ fn validate_host_port(field: &'static str, authority: &str) -> Result<()> {
             });
         }
         let inner = &host[1..host.len() - 1];
-        validate_ipv6_literal(inner).map_err(|e| map_host_error(field, e))?;
+        validate_ipv6_literal(field, inner)?;
         (inner, port)
     } else {
         let Some((host, port)) = authority.rsplit_once(':') else {
@@ -397,7 +397,7 @@ fn validate_host_port(field: &'static str, authority: &str) -> Result<()> {
                 message: format!("{field} host must not be empty"),
             });
         }
-        validate_host(host).map_err(|e| map_host_error(field, e))?;
+        validate_host(field, host)?;
         (host, port)
     };
 
@@ -431,47 +431,32 @@ fn validate_host_port(field: &'static str, authority: &str) -> Result<()> {
     Ok(())
 }
 
-fn map_host_error(field: &'static str, err: Error) -> Error {
-    match err {
-        Error::InvalidConnectUdpRequest { message, .. } => {
-            Error::InvalidConnectUdpRequest { field, message }
-        }
-        other => other,
-    }
-}
-
-fn validate_host(host: &str) -> Result<()> {
+fn validate_host(field: &'static str, host: &str) -> Result<()> {
     // IPv6 bracket literal.
     if host.starts_with('[') && host.ends_with(']') {
-        return validate_ipv6_literal(&host[1..host.len() - 1]);
+        return validate_ipv6_literal(field, &host[1..host.len() - 1]);
     }
 
-    // IPv4 literal.
-    if host.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
-        return validate_ipv4_literal(host);
+    // IPv4 literal: only digits and dots, and parses as IPv4.
+    // Hosts like `1234.example.com` that look numeric but do not parse as
+    // IPv4 fall through to reg-name validation per RFC 3986.
+    if host.bytes().all(|b| b.is_ascii_digit() || b == b'.') && Ipv4Addr::from_str(host).is_ok() {
+        return Ok(());
     }
 
     // Registered name: unreserved / sub-delims per RFC 3986.
     if !host.chars().all(is_valid_reg_name_char) {
         return Err(Error::InvalidConnectUdpRequest {
-            field: "target_host",
-            message: "target_host contains invalid characters".into(),
+            field,
+            message: format!("{field} contains invalid characters"),
         });
     }
     Ok(())
 }
 
-fn validate_ipv4_literal(s: &str) -> Result<()> {
-    Ipv4Addr::from_str(s).map_err(|_| Error::InvalidConnectUdpRequest {
-        field: "target_host",
-        message: format!("'{s}' is not a valid IPv4 address"),
-    })?;
-    Ok(())
-}
-
-fn validate_ipv6_literal(s: &str) -> Result<()> {
+fn validate_ipv6_literal(field: &'static str, s: &str) -> Result<()> {
     Ipv6Addr::from_str(s).map_err(|_| Error::InvalidConnectUdpRequest {
-        field: "target_host",
+        field,
         message: format!("'{s}' is not a valid IPv6 address"),
     })?;
     Ok(())
@@ -744,6 +729,12 @@ mod tests {
     }
 
     #[test]
+    fn request_accepts_ipv4_like_reg_name() {
+        let req = ConnectUdpRequest::new("1234.example.com", 53, None::<String>).unwrap();
+        assert_eq!(req.target_host(), "1234.example.com");
+    }
+
+    #[test]
     fn request_rejects_invalid_target_host() {
         let err = ConnectUdpRequest::new("foo/bar", 53, None::<String>).unwrap_err();
         assert!(matches!(
@@ -786,6 +777,16 @@ mod tests {
     }
 
     #[test]
+    fn from_uri_accepts_bracketed_ipv6_target_host() {
+        let req = ConnectUdpRequest::from_uri(
+            "https://proxy.example:443/masque?target_host=%5B%3A%3A1%5D&target_port=53",
+        )
+        .unwrap();
+        assert_eq!(req.target_host(), "[::1]");
+        assert_eq!(req.target_port(), 53);
+    }
+
+    #[test]
     fn from_uri_and_to_uri_round_trip() {
         let original = ConnectUdpRequest::new("target.example", 53, Some("cfg")).unwrap();
         let uri = original.to_uri("proxy.example:443").unwrap();
@@ -821,6 +822,16 @@ mod tests {
         let req = ConnectUdpRequest::new("target.example", 53, None::<String>).unwrap();
         let uri = req.to_uri("[::1]:443").unwrap();
         assert!(uri.starts_with("https://[::1]:443/masque?"));
+    }
+
+    #[test]
+    fn to_uri_preserves_bracketed_ipv6_target_host() {
+        let req = ConnectUdpRequest::new("[::1]", 53, None::<String>).unwrap();
+        let uri = req.to_uri("[::1]:443").unwrap();
+        assert_eq!(
+            uri,
+            "https://[::1]:443/masque?target_host=%5B%3A%3A1%5D&target_port=53"
+        );
     }
 
     #[test]
