@@ -116,34 +116,9 @@ async fn h3_server_accept_returns_none_after_close() {
 
     let mut server =
         H3Server::bind("127.0.0.1:0".parse::<SocketAddr>().unwrap(), server_config).unwrap();
-    server.close();
 
-    let result = tokio::time::timeout(TIMEOUT, server.accept())
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(result.is_none());
-}
-
-#[tokio::test]
-async fn h3_server_close_during_accept_returns_none() {
-    let (certs, key) = generate_self_signed_cert(&["localhost"]).unwrap();
-
-    let mut tls_config = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs, key)
-        .unwrap();
-    tls_config.alpn_protocols = vec![H3_ALPN[..].into()];
-
-    let server_config = quinn::ServerConfig::with_crypto(std::sync::Arc::new(
-        quinn::crypto::rustls::QuicServerConfig::try_from(tls_config).unwrap(),
-    ));
-
-    let mut server =
-        H3Server::bind("127.0.0.1:0".parse::<SocketAddr>().unwrap(), server_config).unwrap();
-
-    // Close the endpoint while no connection is in flight. Any pending accept()
-    // must observe the close rather than a transport error.
+    // Close the endpoint before calling accept(). accept() must observe the
+    // close and return Ok(None) rather than a transport error.
     server.close();
 
     let result = tokio::time::timeout(TIMEOUT, server.accept())
