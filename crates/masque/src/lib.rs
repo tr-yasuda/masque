@@ -27,6 +27,8 @@
 //! - `H3Server` and `H3Connection` for accepting inbound HTTP/3
 //!   connections.
 //! - `H3_ALPN` for the HTTP/3 ALPN identifier.
+//! - `UdpAssociation` and `AssociationId` for managing the UDP socket bound to
+//!   a CONNECT-UDP request.
 //!
 //! When the `test-utils` feature is also enabled, `generate_self_signed_cert`
 //! and `dangerous_test_client_config` are available for local testing. These
@@ -56,6 +58,8 @@ pub mod settings;
 pub mod types;
 
 #[cfg(feature = "h3")]
+pub mod association;
+#[cfg(feature = "h3")]
 pub mod client;
 #[cfg(feature = "h3")]
 pub mod server;
@@ -78,6 +82,8 @@ pub use settings::{
 };
 pub use types::{Protocol, Session};
 
+#[cfg(feature = "h3")]
+pub use association::{AssociationId, MAX_UDP_PAYLOAD, UdpAssociation};
 #[cfg(feature = "h3")]
 pub use client::H3Client;
 #[cfg(feature = "h3")]
