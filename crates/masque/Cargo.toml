@@ -34,8 +34,9 @@ quinn = { version = "0.11", optional = true }
 # HTTP/3 implementation. Required by the optional `h3` feature.
 h3 = { version = "0.0.8", optional = true }
 # h3 driver for Quinn. Pinned to 0.0.10 because 0.0.8 is incompatible with
-# quinn 0.11.11.
-h3-quinn = { version = "0.0.10", optional = true }
+# quinn 0.11.11. The `datagram` feature is required for HTTP/3 Datagrams
+# (RFC 9297), which CONNECT-UDP uses.
+h3-quinn = { version = "0.0.10", optional = true, features = ["datagram"] }
 # TLS 1.3 for QUIC handshakes. Required by the optional `h3` feature.
 rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std"] }
 # Async runtime used by the `h3` feature examples and tests.
