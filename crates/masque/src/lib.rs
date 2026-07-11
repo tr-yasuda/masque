@@ -80,7 +80,7 @@ pub use error::{
 pub use settings::{
     H3DatagramSettingValue, SETTINGS_H3_DATAGRAM, validate_h3_datagram_setting_value,
 };
-pub use types::{Protocol, Session};
+pub use types::{Protocol, Session, UdpCarrier};
 
 #[cfg(feature = "h3")]
 pub use association::{

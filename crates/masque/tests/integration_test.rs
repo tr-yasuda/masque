@@ -710,3 +710,55 @@ fn connect_udp_request_uri_generation_rejects_invalid_proxy_authority_from_publi
         }
     ));
 }
+
+#[test]
+fn udp_carrier_variants_are_publicly_accessible() {
+    assert_eq!(
+        masque::UdpCarrier::H3Datagram,
+        masque::UdpCarrier::H3Datagram
+    );
+    assert_eq!(
+        masque::UdpCarrier::DatagramCapsule,
+        masque::UdpCarrier::DatagramCapsule
+    );
+    assert_ne!(
+        masque::UdpCarrier::H3Datagram,
+        masque::UdpCarrier::DatagramCapsule
+    );
+}
+
+#[test]
+fn session_selects_udp_carrier_from_public_api() {
+    use masque::{H3DatagramSettingValue, Protocol, Session, UdpCarrier};
+
+    let mut session = Session::new(Protocol::ConnectUdp);
+    session
+        .set_local_h3_datagram(H3DatagramSettingValue::ENABLED)
+        .unwrap();
+    session
+        .negotiate_peer_h3_datagram(H3DatagramSettingValue::ENABLED)
+        .unwrap();
+    assert_eq!(
+        session.select_udp_carrier().unwrap(),
+        UdpCarrier::H3Datagram
+    );
+}
+
+#[test]
+fn session_selects_datagram_capsule_carrier_from_public_api() {
+    use masque::{H3DatagramSettingValue, Protocol, Session, UdpCarrier};
+
+    let mut session = Session::new(Protocol::ConnectUdp);
+    session
+        .set_local_h3_datagram(H3DatagramSettingValue::DISABLED)
+        .unwrap();
+    session
+        .negotiate_peer_h3_datagram(H3DatagramSettingValue::DISABLED)
+        .unwrap();
+    session.set_local_capsule_protocol(true).unwrap();
+    session.negotiate_peer_capsule_protocol(true).unwrap();
+    assert_eq!(
+        session.select_udp_carrier().unwrap(),
+        UdpCarrier::DatagramCapsule
+    );
+}
