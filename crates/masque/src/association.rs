@@ -291,8 +291,9 @@ impl UdpAssociation {
     /// [`H3DatagramErrorKind::InvalidContextId`] if the Context ID is missing,
     /// malformed, or not the default context (0).
     ///
-    /// Non-minimal varint encodings of the Context ID value `0` are accepted,
-    /// per RFC 9000 Section 16.
+    /// The Context ID must be encoded in the shortest possible form per RFC
+    /// 9000 Section 16; non-minimal encodings of the value `0` (for example,
+    /// `0x40 0x00`) are rejected.
     ///
     /// Returns [`Error::H3DatagramError`] with kind
     /// [`H3DatagramErrorKind::PayloadTooLarge`] if the decoded UDP payload
@@ -317,6 +318,12 @@ impl UdpAssociation {
             return Err(Error::h3_datagram_error(
                 H3DatagramErrorKind::InvalidContextId,
                 format!("unsupported CONNECT-UDP Context ID {context_id}, expected 0"),
+            ));
+        }
+        if consumed != 1 {
+            return Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::InvalidContextId,
+                "non-canonical Context ID 0 encoding: must use shortest varint form",
             ));
         }
         let udp_payload = &payload[consumed..];
@@ -406,8 +413,9 @@ impl UdpAssociation {
     /// [`H3DatagramErrorKind::InvalidContextId`] if the Context ID is missing,
     /// malformed, or not the default context (0).
     ///
-    /// Non-minimal varint encodings of the Context ID value `0` are accepted,
-    /// per RFC 9000 Section 16.
+    /// The Context ID must be encoded in the shortest possible form per RFC
+    /// 9000 Section 16; non-minimal encodings of the value `0` (for example,
+    /// `0x40 0x00`) are rejected.
     ///
     /// Returns [`Error::H3DatagramError`] with kind
     /// [`H3DatagramErrorKind::PayloadTooLarge`] if the decoded UDP payload
@@ -433,6 +441,12 @@ impl UdpAssociation {
             return Err(Error::h3_datagram_error(
                 H3DatagramErrorKind::InvalidContextId,
                 format!("unsupported CONNECT-UDP Context ID {context_id}, expected 0"),
+            ));
+        }
+        if consumed != 1 {
+            return Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::InvalidContextId,
+                "non-canonical Context ID 0 encoding: must use shortest varint form",
             ));
         }
         let udp_payload = &payload[consumed..];
@@ -897,7 +911,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn decode_h3_datagram_accepts_noncanonical_zero_context_id() {
+    async fn decode_h3_datagram_rejects_noncanonical_zero_context_id() {
         let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
         let assoc = UdpAssociation::bind(
             "127.0.0.1:0".parse().unwrap(),
@@ -909,11 +923,17 @@ mod tests {
         .await
         .unwrap();
 
-        // 0x40 0x00 is a valid 2-byte varint representing 0. RFC 9000 Section 16
-        // allows non-minimal encodings outside of frame types, so it is accepted.
+        // 0x40 0x00 is a non-minimal 2-byte varint representing 0. RFC 9000
+        // Section 16 requires the shortest encoding, so it is rejected.
         let datagram = HttpDatagram::new(test_stream_id(), [0x40, 0x00, b'x']).unwrap();
-        let payload = assoc.decode_h3_datagram(datagram).unwrap();
-        assert_eq!(payload, b"x");
+        let err = assoc.decode_h3_datagram(datagram).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::InvalidContextId,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -1528,7 +1548,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn decode_datagram_capsule_accepts_noncanonical_zero_context_id() {
+    async fn decode_datagram_capsule_rejects_noncanonical_zero_context_id() {
         let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
         let assoc = UdpAssociation::bind(
             "127.0.0.1:0".parse().unwrap(),
@@ -1540,12 +1560,18 @@ mod tests {
         .await
         .unwrap();
 
-        // 0x40 0x00 is a valid 2-byte varint representing 0. RFC 9000 Section 16
-        // allows non-minimal encodings outside of frame types, so it is accepted.
+        // 0x40 0x00 is a non-minimal 2-byte varint representing 0. RFC 9000
+        // Section 16 requires the shortest encoding, so it is rejected.
         let datagram = HttpDatagram::new(test_stream_id(), [0x40, 0x00, b'x']).unwrap();
         let capsule = DatagramCapsule::new(datagram);
-        let payload = assoc.decode_datagram_capsule(capsule).unwrap();
-        assert_eq!(payload, b"x");
+        let err = assoc.decode_datagram_capsule(capsule).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::InvalidContextId,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
