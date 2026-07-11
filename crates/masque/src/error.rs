@@ -153,7 +153,8 @@ pub enum Error {
     CapsuleProtocolConflict {
         /// The value that was already negotiated.
         previous: bool,
-        /// The conflicting value that was attempted.
+        /// The value received from the peer or set locally in the conflicting
+        /// negotiation.
         received: bool,
     },
 
@@ -532,13 +533,13 @@ impl fmt::Display for Error {
                 } else {
                     write!(
                         f,
-                        "Capsule-Protocol already set to {previous}; attempted conflicting value {received}"
+                        "Capsule-Protocol already set to {previous}; got conflicting value {received}"
                     )
                 }
             }
             Error::H3DatagramError { kind, message, .. } => match kind {
                 H3DatagramErrorKind::NotNegotiated | H3DatagramErrorKind::MismatchedStreamId => {
-                    write!(f, "HTTP/3 datagram local error: {}", message.0)
+                    write!(f, "Datagram carrier local error: {}", message.0)
                 }
                 _ => write!(
                     f,
@@ -753,7 +754,7 @@ mod tests {
             Error::h3_datagram_error(H3DatagramErrorKind::NotNegotiated, "carrier not selected");
         assert_eq!(
             not_negotiated.to_string(),
-            "HTTP/3 datagram local error: carrier not selected"
+            "Datagram carrier local error: carrier not selected"
         );
         assert!(!not_negotiated.to_string().contains("0x33"));
 
@@ -763,7 +764,7 @@ mod tests {
         );
         assert_eq!(
             mismatched.to_string(),
-            "HTTP/3 datagram local error: wrong request stream"
+            "Datagram carrier local error: wrong request stream"
         );
         assert!(!mismatched.to_string().contains("0x33"));
     }
@@ -908,7 +909,7 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "Capsule-Protocol already set to true; attempted conflicting value false"
+            "Capsule-Protocol already set to true; got conflicting value false"
         );
     }
 

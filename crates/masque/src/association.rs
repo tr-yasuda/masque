@@ -221,7 +221,7 @@ impl UdpAssociation {
         if !self.session.is_datagram_capsule_enabled() {
             return Err(Error::h3_datagram_error(
                 H3DatagramErrorKind::NotNegotiated,
-                "DATAGRAM capsules are not negotiated for this association",
+                "DATAGRAM capsules are not enabled or selected for this association",
             ));
         }
         Ok(())

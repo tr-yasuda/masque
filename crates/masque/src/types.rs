@@ -219,12 +219,12 @@ impl Session {
     /// This is `true` only when HTTP/3 Datagrams are finalized but not enabled
     /// and both endpoints have agreed to `Capsule-Protocol: ?1`.
     ///
-    /// `None` for `SETTINGS_H3_DATAGRAM` means "not yet negotiated", so the
-    /// caller must finalize the HTTP/3 settings exchange before selecting a
-    /// carrier. Once finalized, an absent `SETTINGS_H3_DATAGRAM` value is
-    /// treated as disabled per RFC 9297 Section 2.1.1; callers can record that
-    /// default by passing `H3DatagramSettingValue::DISABLED` to the local and
-    /// peer setters.
+    /// `None` for `SETTINGS_H3_DATAGRAM` means "not yet negotiated". Because
+    /// `Session` does not observe the HTTP/3 SETTINGS frame directly, the caller
+    /// must finalize the settings exchange by recording every advertised value;
+    /// once a side's SETTINGS frame is fully received, an absent
+    /// `SETTINGS_H3_DATAGRAM` should be recorded as
+    /// `H3DatagramSettingValue::DISABLED` per RFC 9297 Section 2.1.1.
     #[must_use]
     pub(crate) fn is_datagram_capsule_enabled(&self) -> bool {
         let h3_finalized =
