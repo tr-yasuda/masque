@@ -216,11 +216,14 @@ impl Session {
 
     /// Return whether DATAGRAM capsules are enabled for this session.
     ///
-    /// This is `true` only when HTTP/3 Datagrams are not enabled and both
-    /// endpoints have agreed to `Capsule-Protocol: ?1`.
+    /// This is `true` only when HTTP/3 Datagrams are finalized but not enabled
+    /// and both endpoints have agreed to `Capsule-Protocol: ?1`.
     #[must_use]
     pub(crate) fn is_datagram_capsule_enabled(&self) -> bool {
-        !self.is_h3_datagram_enabled()
+        let h3_finalized =
+            self.caps.local_h3_datagram.is_some() && self.caps.peer_h3_datagram.is_some();
+        h3_finalized
+            && !self.is_h3_datagram_enabled()
             && matches!(
                 (
                     self.caps.local_capsule_protocol,
@@ -521,6 +524,24 @@ mod tests {
     #[test]
     fn session_select_udp_carrier_fails_when_nothing_enabled() {
         let session = Session::new(Protocol::ConnectUdp);
+        let err = session.select_udp_carrier().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::NotNegotiated,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn session_select_udp_carrier_fails_when_capsule_protocol_set_but_h3_not_finalized() {
+        let mut session = Session::new(Protocol::ConnectUdp);
+        // Capsule-Protocol is mutually agreed, but SETTINGS_H3_DATAGRAM has
+        // not been recorded yet. The carrier cannot be selected until the
+        // HTTP/3 Datagram negotiation is finalized.
+        session.set_local_capsule_protocol(true).unwrap();
+        session.negotiate_peer_capsule_protocol(true).unwrap();
         let err = session.select_udp_carrier().unwrap_err();
         assert!(matches!(
             err,
