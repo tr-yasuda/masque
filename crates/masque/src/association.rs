@@ -324,6 +324,11 @@ impl UdpAssociation {
     /// encoded as a QUIC variable-length integer, per RFC 9298 Section 8.2, then
     /// wrapped in a [`DatagramCapsule`].
     ///
+    /// The caller is expected to use [`crate::Session::select_udp_carrier`] to
+    /// decide whether to carry UDP payloads over HTTP/3 Datagrams or `DATAGRAM`
+    /// capsules, and then invoke the matching method. `UdpAssociation` itself
+    /// does not validate that the capsule fallback path has been negotiated.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::InvalidConfig`] if `payload` exceeds the address-family
@@ -354,6 +359,11 @@ impl UdpAssociation {
     /// The CONNECT-UDP Context ID is parsed from the start of the capsule value
     /// and must be the default context (0). The remaining bytes are returned as
     /// the UDP payload.
+    ///
+    /// The caller is expected to use [`crate::Session::select_udp_carrier`] to
+    /// decide whether to carry UDP payloads over HTTP/3 Datagrams or `DATAGRAM`
+    /// capsules, and then invoke the matching method. `UdpAssociation` itself
+    /// does not validate that the capsule fallback path has been negotiated.
     ///
     /// # Errors
     ///
@@ -1415,6 +1425,98 @@ mod tests {
             err,
             Error::H3DatagramError {
                 kind: H3DatagramErrorKind::InvalidContextId,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn encode_datagram_capsule_round_trips_max_ipv4_payload() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            capsule_only_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let payload = vec![0u8; MAX_UDP_PAYLOAD_IPV4];
+        let capsule = assoc.encode_datagram_capsule(payload.clone()).unwrap();
+        let decoded = assoc.decode_datagram_capsule(capsule).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[tokio::test]
+    async fn encode_datagram_capsule_round_trips_max_ipv6_payload() {
+        let target: SocketAddr = "[::1]:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "[::1]:0".parse().unwrap(),
+            target,
+            capsule_only_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let payload = vec![0u8; MAX_UDP_PAYLOAD_IPV6];
+        let capsule = assoc.encode_datagram_capsule(payload.clone()).unwrap();
+        let decoded = assoc.decode_datagram_capsule(capsule).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[tokio::test]
+    async fn decode_datagram_capsule_rejects_oversized_ipv4_payload() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            capsule_only_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let mut payload = vec![0x00];
+        payload.extend_from_slice(&vec![0u8; MAX_UDP_PAYLOAD_IPV4 + 1]);
+        let datagram = HttpDatagram::new(test_stream_id(), payload).unwrap();
+        let capsule = DatagramCapsule::new(datagram);
+        let err = assoc.decode_datagram_capsule(capsule).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::PayloadTooLarge,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn decode_datagram_capsule_rejects_oversized_ipv6_payload() {
+        let target: SocketAddr = "[::1]:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "[::1]:0".parse().unwrap(),
+            target,
+            capsule_only_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let mut payload = vec![0x00];
+        payload.extend_from_slice(&vec![0u8; MAX_UDP_PAYLOAD_IPV6 + 1]);
+        let datagram = HttpDatagram::new(test_stream_id(), payload).unwrap();
+        let capsule = DatagramCapsule::new(datagram);
+        let err = assoc.decode_datagram_capsule(capsule).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::PayloadTooLarge,
                 ..
             }
         ));
