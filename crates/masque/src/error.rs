@@ -526,10 +526,16 @@ impl fmt::Display for Error {
                 f,
                 "HTTP/3 setting {setting:#x} already negotiated with value {previous}; received conflicting value {received}"
             ),
-            Error::CapsuleProtocolConflict { previous, received } => write!(
-                f,
-                "Capsule-Protocol already set to {previous}; attempted conflicting value {received}"
-            ),
+            Error::CapsuleProtocolConflict { previous, received } => {
+                if previous == received {
+                    write!(f, "Capsule-Protocol already set to {previous}")
+                } else {
+                    write!(
+                        f,
+                        "Capsule-Protocol already set to {previous}; attempted conflicting value {received}"
+                    )
+                }
+            }
             Error::H3DatagramError { kind, message, .. } => match kind {
                 H3DatagramErrorKind::NotNegotiated | H3DatagramErrorKind::MismatchedStreamId => {
                     write!(f, "HTTP/3 datagram local error: {}", message.0)
@@ -904,6 +910,15 @@ mod tests {
             err.to_string(),
             "Capsule-Protocol already set to true; attempted conflicting value false"
         );
+    }
+
+    #[test]
+    fn capsule_protocol_conflict_display_omits_conflicting_for_identical_value() {
+        let err = Error::CapsuleProtocolConflict {
+            previous: true,
+            received: true,
+        };
+        assert_eq!(err.to_string(), "Capsule-Protocol already set to true");
     }
 
     #[test]

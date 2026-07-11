@@ -243,23 +243,22 @@ impl UdpAssociation {
     /// [`H3DatagramErrorKind::NotNegotiated`] if HTTP/3 Datagrams have not been
     /// negotiated for this association.
     ///
-    /// Returns [`Error::H3DatagramError`] with kind
-    /// [`H3DatagramErrorKind::PayloadTooLarge`] if `payload` exceeds the
-    /// address-family UDP payload limit.
+    /// Returns [`Error::InvalidConfig`] if `payload` exceeds the address-family
+    /// UDP payload limit.
     pub fn encode_h3_datagram(&self, payload: impl Into<Vec<u8>>) -> Result<HttpDatagram> {
         self.ensure_h3_datagrams_enabled()?;
         let payload = payload.into();
         let max = max_payload_for_addr(self.target);
         if payload.len() > max {
-            return Err(Error::h3_datagram_error(
-                H3DatagramErrorKind::PayloadTooLarge,
-                format!(
+            return Err(Error::InvalidConfig {
+                field: "payload",
+                message: format!(
                     "payload length {} exceeds maximum UDP payload size {} for {}",
                     payload.len(),
                     max,
                     self.target.ip()
                 ),
-            ));
+            });
         }
         let mut framed = Vec::with_capacity(payload.len() + 1);
         framed.push(0x00);
@@ -292,6 +291,9 @@ impl UdpAssociation {
     /// [`H3DatagramErrorKind::InvalidContextId`] if the Context ID is missing,
     /// malformed, or not the default context (0).
     ///
+    /// Non-minimal varint encodings of the Context ID value `0` are accepted,
+    /// per RFC 9000 Section 16.
+    ///
     /// Returns [`Error::H3DatagramError`] with kind
     /// [`H3DatagramErrorKind::PayloadTooLarge`] if the decoded UDP payload
     /// exceeds the address-family UDP payload limit.
@@ -315,12 +317,6 @@ impl UdpAssociation {
             return Err(Error::h3_datagram_error(
                 H3DatagramErrorKind::InvalidContextId,
                 format!("unsupported CONNECT-UDP Context ID {context_id}, expected 0"),
-            ));
-        }
-        if consumed != 1 {
-            return Err(Error::h3_datagram_error(
-                H3DatagramErrorKind::InvalidContextId,
-                "CONNECT-UDP Context ID 0 must use the canonical 1-byte varint encoding",
             ));
         }
         let udp_payload = &payload[consumed..];
@@ -410,6 +406,9 @@ impl UdpAssociation {
     /// [`H3DatagramErrorKind::InvalidContextId`] if the Context ID is missing,
     /// malformed, or not the default context (0).
     ///
+    /// Non-minimal varint encodings of the Context ID value `0` are accepted,
+    /// per RFC 9000 Section 16.
+    ///
     /// Returns [`Error::H3DatagramError`] with kind
     /// [`H3DatagramErrorKind::PayloadTooLarge`] if the decoded UDP payload
     /// exceeds the address-family UDP payload limit.
@@ -434,12 +433,6 @@ impl UdpAssociation {
             return Err(Error::h3_datagram_error(
                 H3DatagramErrorKind::InvalidContextId,
                 format!("unsupported CONNECT-UDP Context ID {context_id}, expected 0"),
-            ));
-        }
-        if consumed != 1 {
-            return Err(Error::h3_datagram_error(
-                H3DatagramErrorKind::InvalidContextId,
-                "CONNECT-UDP Context ID 0 must use the canonical 1-byte varint encoding",
             ));
         }
         let udp_payload = &payload[consumed..];
@@ -696,8 +689,8 @@ mod tests {
         let err = assoc.encode_h3_datagram(payload).unwrap_err();
         assert!(matches!(
             err,
-            Error::H3DatagramError {
-                kind: H3DatagramErrorKind::PayloadTooLarge,
+            Error::InvalidConfig {
+                field: "payload",
                 ..
             }
         ));
@@ -904,7 +897,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn decode_h3_datagram_rejects_noncanonical_zero_context_id() {
+    async fn decode_h3_datagram_accepts_noncanonical_zero_context_id() {
         let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
         let assoc = UdpAssociation::bind(
             "127.0.0.1:0".parse().unwrap(),
@@ -916,17 +909,11 @@ mod tests {
         .await
         .unwrap();
 
-        // 0x40 0x00 is a valid 2-byte varint representing 0, but QUIC varints
-        // are required to use the shortest encoding, so it must be rejected.
+        // 0x40 0x00 is a valid 2-byte varint representing 0. RFC 9000 Section 16
+        // allows non-minimal encodings outside of frame types, so it is accepted.
         let datagram = HttpDatagram::new(test_stream_id(), [0x40, 0x00, b'x']).unwrap();
-        let err = assoc.decode_h3_datagram(datagram).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::H3DatagramError {
-                kind: H3DatagramErrorKind::InvalidContextId,
-                ..
-            }
-        ));
+        let payload = assoc.decode_h3_datagram(datagram).unwrap();
+        assert_eq!(payload, b"x");
     }
 
     #[tokio::test]
@@ -1541,7 +1528,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn decode_datagram_capsule_rejects_noncanonical_zero_context_id() {
+    async fn decode_datagram_capsule_accepts_noncanonical_zero_context_id() {
         let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
         let assoc = UdpAssociation::bind(
             "127.0.0.1:0".parse().unwrap(),
@@ -1553,18 +1540,12 @@ mod tests {
         .await
         .unwrap();
 
-        // 0x40 0x00 is a valid 2-byte varint representing 0, but QUIC varints
-        // are required to use the shortest encoding, so it must be rejected.
+        // 0x40 0x00 is a valid 2-byte varint representing 0. RFC 9000 Section 16
+        // allows non-minimal encodings outside of frame types, so it is accepted.
         let datagram = HttpDatagram::new(test_stream_id(), [0x40, 0x00, b'x']).unwrap();
         let capsule = DatagramCapsule::new(datagram);
-        let err = assoc.decode_datagram_capsule(capsule).unwrap_err();
-        assert!(matches!(
-            err,
-            Error::H3DatagramError {
-                kind: H3DatagramErrorKind::InvalidContextId,
-                ..
-            }
-        ));
+        let payload = assoc.decode_datagram_capsule(capsule).unwrap();
+        assert_eq!(payload, b"x");
     }
 
     #[tokio::test]
