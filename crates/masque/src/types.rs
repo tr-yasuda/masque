@@ -3,7 +3,7 @@
 use std::fmt;
 
 use crate::settings::{H3DatagramSettingValue, SETTINGS_H3_DATAGRAM};
-use crate::{Error, Result};
+use crate::{Error, H3DatagramErrorKind, Result};
 
 /// Identifies a MASQUE target protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -29,6 +29,19 @@ impl fmt::Display for Protocol {
     }
 }
 
+/// The carrier used to transport UDP payloads for a CONNECT-UDP association.
+///
+/// `Session::select_udp_carrier` returns this value based on negotiated
+/// capabilities. Callers then invoke the matching `UdpAssociation` encode/decode
+/// method for the selected carrier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UdpCarrier {
+    /// UDP payloads are carried in HTTP/3 Datagram frames.
+    H3Datagram,
+    /// UDP payloads are carried as `DATAGRAM` capsules on the request stream.
+    DatagramCapsule,
+}
+
 /// Negotiated capabilities for a MASQUE session.
 ///
 /// Keeping related HTTP/3 capability state in a dedicated inner type lets
@@ -44,6 +57,10 @@ struct NegotiatedCaps {
     local_h3_datagram: Option<H3DatagramSettingValue>,
     /// The peer endpoint's advertised `SETTINGS_H3_DATAGRAM` value, if any.
     peer_h3_datagram: Option<H3DatagramSettingValue>,
+    /// The local endpoint's advertised `Capsule-Protocol` value, if any.
+    local_capsule_protocol: Option<bool>,
+    /// The peer endpoint's advertised `Capsule-Protocol` value, if any.
+    peer_capsule_protocol: Option<bool>,
 }
 
 /// A MASQUE session context.
@@ -81,6 +98,8 @@ impl Session {
             caps: NegotiatedCaps {
                 local_h3_datagram: None,
                 peer_h3_datagram: None,
+                local_capsule_protocol: None,
+                peer_capsule_protocol: None,
             },
         }
     }
@@ -146,6 +165,74 @@ impl Session {
         }
         self.caps.peer_h3_datagram = Some(value);
         Ok(())
+    }
+
+    /// Record the local endpoint's advertised `Capsule-Protocol` value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::CapsuleProtocolConflict`] if the local value has already
+    /// been recorded.
+    pub fn set_local_capsule_protocol(&mut self, enabled: bool) -> Result<()> {
+        if let Some(previous) = self.caps.local_capsule_protocol {
+            return Err(Error::CapsuleProtocolConflict {
+                previous,
+                received: enabled,
+            });
+        }
+        self.caps.local_capsule_protocol = Some(enabled);
+        Ok(())
+    }
+
+    /// Apply a peer `Capsule-Protocol` value received from the remote endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::CapsuleProtocolConflict`] if the peer value has already
+    /// been recorded.
+    pub fn negotiate_peer_capsule_protocol(&mut self, enabled: bool) -> Result<()> {
+        if let Some(previous) = self.caps.peer_capsule_protocol {
+            return Err(Error::CapsuleProtocolConflict {
+                previous,
+                received: enabled,
+            });
+        }
+        self.caps.peer_capsule_protocol = Some(enabled);
+        Ok(())
+    }
+
+    /// Return whether DATAGRAM capsules are enabled for this session.
+    ///
+    /// This is `true` only when HTTP/3 Datagrams are not enabled and both
+    /// endpoints have agreed to `Capsule-Protocol: ?1`.
+    #[must_use]
+    pub(crate) fn is_datagram_capsule_enabled(&self) -> bool {
+        !self.is_h3_datagram_enabled()
+            && matches!(
+                (
+                    self.caps.local_capsule_protocol,
+                    self.caps.peer_capsule_protocol
+                ),
+                (Some(true), Some(true))
+            )
+    }
+
+    /// Select the carrier to use for UDP payload transport.
+    ///
+    /// HTTP/3 Datagrams are preferred when available. If not, DATAGRAM capsules
+    /// are selected when negotiated. Otherwise returns
+    /// [`Error::H3DatagramError`] with kind [`H3DatagramErrorKind::NotNegotiated`].
+    pub fn select_udp_carrier(&self) -> Result<UdpCarrier> {
+        if self.is_h3_datagram_enabled() {
+            Ok(UdpCarrier::H3Datagram)
+        } else if self.is_datagram_capsule_enabled() {
+            Ok(UdpCarrier::DatagramCapsule)
+        } else {
+            Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::NotNegotiated,
+                "no UDP transport carrier is negotiated for this session",
+            ))
+        }
     }
 }
 
@@ -371,5 +458,78 @@ mod tests {
             .negotiate_peer_h3_datagram(H3DatagramSettingValue::ENABLED)
             .unwrap();
         assert!(session.is_h3_datagram_enabled());
+    }
+
+    #[test]
+    fn session_selects_h3_datagram_when_enabled() {
+        let mut session = Session::new(Protocol::ConnectUdp);
+        session
+            .set_local_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
+        session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
+        assert_eq!(
+            session.select_udp_carrier().unwrap(),
+            UdpCarrier::H3Datagram
+        );
+    }
+
+    #[test]
+    fn session_selects_datagram_capsule_when_h3_disabled_and_capsule_protocol_enabled() {
+        let mut session = Session::new(Protocol::ConnectUdp);
+        session
+            .set_local_h3_datagram(H3DatagramSettingValue::DISABLED)
+            .unwrap();
+        session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::DISABLED)
+            .unwrap();
+        session.set_local_capsule_protocol(true).unwrap();
+        session.negotiate_peer_capsule_protocol(true).unwrap();
+        assert_eq!(
+            session.select_udp_carrier().unwrap(),
+            UdpCarrier::DatagramCapsule
+        );
+    }
+
+    #[test]
+    fn session_select_udp_carrier_fails_when_nothing_enabled() {
+        let session = Session::new(Protocol::ConnectUdp);
+        let err = session.select_udp_carrier().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::NotNegotiated,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn session_rejects_conflicting_local_capsule_protocol() {
+        let mut session = Session::new(Protocol::ConnectUdp);
+        session.set_local_capsule_protocol(true).unwrap();
+        let err = session.set_local_capsule_protocol(false).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::CapsuleProtocolConflict {
+                previous: true,
+                received: false,
+            }
+        ));
+    }
+
+    #[test]
+    fn session_rejects_conflicting_peer_capsule_protocol() {
+        let mut session = Session::new(Protocol::ConnectUdp);
+        session.negotiate_peer_capsule_protocol(true).unwrap();
+        let err = session.negotiate_peer_capsule_protocol(false).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::CapsuleProtocolConflict {
+                previous: true,
+                received: false,
+            }
+        ));
     }
 }

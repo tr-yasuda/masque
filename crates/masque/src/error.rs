@@ -145,6 +145,17 @@ pub enum Error {
         received: u64,
     },
 
+    /// `Capsule-Protocol` was negotiated more than once with conflicting values.
+    ///
+    /// Unlike `H3SettingsConflict`, this applies to the `Capsule-Protocol` HTTP
+    /// header rather than an HTTP/3 setting.
+    CapsuleProtocolConflict {
+        /// The value that was already negotiated.
+        previous: bool,
+        /// The conflicting value received from the peer.
+        received: bool,
+    },
+
     /// An HTTP/3 datagram or Capsule Protocol error occurred.
     ///
     /// This includes parse/protocol errors that correspond to the
@@ -345,6 +356,10 @@ impl Clone for Error {
                 previous: *previous,
                 received: *received,
             },
+            Self::CapsuleProtocolConflict { previous, received } => Self::CapsuleProtocolConflict {
+                previous: *previous,
+                received: *received,
+            },
             Self::H3DatagramError {
                 kind,
                 message,
@@ -448,6 +463,16 @@ impl PartialEq for Error {
                 },
             ) => setting_a == setting_b && previous_a == previous_b && received_a == received_b,
             (
+                Self::CapsuleProtocolConflict {
+                    previous: previous_a,
+                    received: received_a,
+                },
+                Self::CapsuleProtocolConflict {
+                    previous: previous_b,
+                    received: received_b,
+                },
+            ) => previous_a == previous_b && received_a == received_b,
+            (
                 Self::H3DatagramError {
                     kind: kind_a,
                     message: message_a,
@@ -499,6 +524,10 @@ impl fmt::Display for Error {
             } => write!(
                 f,
                 "HTTP/3 setting {setting:#x} already negotiated with value {previous}; received conflicting value {received}"
+            ),
+            Error::CapsuleProtocolConflict { previous, received } => write!(
+                f,
+                "Capsule-Protocol already negotiated with value {previous}; received conflicting value {received}"
             ),
             Error::H3DatagramError { message, .. } => write!(
                 f,
@@ -557,6 +586,11 @@ impl fmt::Debug for Error {
             } => f
                 .debug_struct("H3SettingsConflict")
                 .field("setting", setting)
+                .field("previous", previous)
+                .field("received", received)
+                .finish(),
+            Error::CapsuleProtocolConflict { previous, received } => f
+                .debug_struct("CapsuleProtocolConflict")
                 .field("previous", previous)
                 .field("received", received)
                 .finish(),
@@ -831,5 +865,39 @@ mod tests {
                 crate::quic_varint::MAX_VARINT
             )
         );
+    }
+
+    #[test]
+    fn capsule_protocol_conflict_display_includes_values() {
+        let err = Error::CapsuleProtocolConflict {
+            previous: true,
+            received: false,
+        };
+        assert_eq!(
+            err.to_string(),
+            "Capsule-Protocol already negotiated with value true; received conflicting value false"
+        );
+    }
+
+    #[test]
+    fn capsule_protocol_conflict_is_cloneable() {
+        let err = Error::CapsuleProtocolConflict {
+            previous: true,
+            received: false,
+        };
+        let cloned = err.clone();
+        assert_eq!(err, cloned);
+        assert_eq!(err.to_string(), cloned.to_string());
+    }
+
+    #[test]
+    fn error_is_cloneable_includes_capsule_protocol_conflict() {
+        let err = Error::CapsuleProtocolConflict {
+            previous: false,
+            received: true,
+        };
+        let cloned = err.clone();
+        assert_eq!(err, cloned);
+        assert_eq!(err.to_string(), cloned.to_string());
     }
 }
