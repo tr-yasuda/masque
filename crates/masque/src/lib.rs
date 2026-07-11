@@ -4,7 +4,8 @@
 //! starting with CONNECT-UDP over HTTP/3.
 //!
 //! This crate provides the building blocks for MASQUE tunneling, including
-//! HTTP/3 Datagram support and the Capsule Protocol as defined in RFC 9297:
+//! HTTP/3 Datagram support, the Capsule Protocol as defined in RFC 9297, and
+//! CONNECT-UDP as defined in RFC 9298:
 //!
 //! - [`HttpDatagram`] for HTTP/3 Datagram payloads (Quarter Stream ID + opaque
 //!   payload) and their encoding/decoding.
@@ -13,7 +14,8 @@
 //! - [`CAPSULE_PROTOCOL`], [`parse_capsule_protocol`], and
 //!   [`serialize_capsule_protocol`] for the `Capsule-Protocol` header.
 //! - [`H3DatagramSettingValue`], [`SETTINGS_H3_DATAGRAM`], and [`Session`] for
-//!   negotiating and tracking HTTP/3 Datagram support.
+//!   negotiating and tracking HTTP/3 Datagram and `Capsule-Protocol` support,
+//!   and for selecting a [`UdpCarrier`] for CONNECT-UDP associations.
 //! - [`ConnectUdpRequest`] and [`CONNECT_UDP_PROTOCOL`] for RFC 9298 CONNECT-UDP
 //!   request targets and URI template parsing.
 //!

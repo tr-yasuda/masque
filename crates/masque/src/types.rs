@@ -43,15 +43,18 @@ pub enum UdpCarrier {
     DatagramCapsule,
 }
 
-/// Negotiated capabilities for a MASQUE session.
+/// Negotiated capabilities for a single MASQUE request/association.
 ///
 /// Keeping related HTTP/3 capability state in a dedicated inner type lets
 /// `Session` grow without turning into an unstructured bag of fields and
 /// keeps the public `Session` shape stable.
 ///
-/// `Option<H3DatagramSettingValue>` encodes the invariant that each direction's
-/// `SETTINGS_H3_DATAGRAM` value is recorded at most once: `None` means not yet
-/// negotiated, and `Some(value)` means the value has been finalized.
+/// This type tracks both `SETTINGS_H3_DATAGRAM` (RFC 9297) and the
+/// `Capsule-Protocol` header (RFC 9298). `Option<H3DatagramSettingValue>`
+/// encodes the invariant that each direction's `SETTINGS_H3_DATAGRAM` value is
+/// recorded at most once: `None` means not yet negotiated, and `Some(value)`
+/// means the value has been finalized. `Option<bool>` records each direction's
+/// advertised `Capsule-Protocol` value in the same way.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NegotiatedCaps {
     /// The local endpoint's advertised `SETTINGS_H3_DATAGRAM` value, if any.
@@ -64,12 +67,21 @@ struct NegotiatedCaps {
     peer_capsule_protocol: Option<bool>,
 }
 
-/// A MASQUE session context.
+/// A MASQUE session context for a single request/association.
 ///
 /// `Session` tracks the target protocol and negotiated HTTP/3 capabilities
-/// (currently HTTP/3 Datagram support per RFC 9297). New negotiated state
-/// should be added inside the internal `NegotiatedCaps` type rather than
-/// appended directly to this struct.
+/// for one MASQUE request/association. This includes HTTP/3 Datagram support
+/// per RFC 9297 and `Capsule-Protocol` negotiation per RFC 9298, which
+/// together determine the selected [`UdpCarrier`] via
+/// [`Session::select_udp_carrier`].
+///
+/// `Session` is scoped to a single MASQUE request/association. It must not be
+/// reused across requests unless the caller intentionally shares identical
+/// negotiation, because per-request state such as `Capsule-Protocol` would
+/// otherwise leak between associations.
+///
+/// New negotiated state should be added inside the internal `NegotiatedCaps`
+/// type rather than appended directly to this struct.
 ///
 /// # Equality semantics
 ///
@@ -221,8 +233,15 @@ impl Session {
     /// Select the carrier to use for UDP payload transport.
     ///
     /// HTTP/3 Datagrams are preferred when available. If not, DATAGRAM capsules
-    /// are selected when negotiated. Otherwise returns
-    /// [`Error::H3DatagramError`] with kind [`H3DatagramErrorKind::NotNegotiated`].
+    /// are selected when `Capsule-Protocol: ?1` has been mutually negotiated.
+    /// Otherwise returns [`Error::H3DatagramError`] with kind
+    /// [`H3DatagramErrorKind::NotNegotiated`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidConfig`] if the session protocol is not
+    /// [`Protocol::ConnectUdp`], because UDP carrier selection only applies to
+    /// CONNECT-UDP associations.
     pub fn select_udp_carrier(&self) -> Result<UdpCarrier> {
         if self.protocol != Protocol::ConnectUdp {
             return Err(Error::InvalidConfig {
