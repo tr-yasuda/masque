@@ -148,11 +148,12 @@ pub enum Error {
     /// `Capsule-Protocol` was negotiated more than once with conflicting values.
     ///
     /// Unlike `H3SettingsConflict`, this applies to the `Capsule-Protocol` HTTP
-    /// header rather than an HTTP/3 setting.
+    /// header rather than an HTTP/3 setting. This variant is used for both
+    /// local setter conflicts and peer negotiation conflicts.
     CapsuleProtocolConflict {
         /// The value that was already negotiated.
         previous: bool,
-        /// The conflicting value received from the peer.
+        /// The conflicting value that was attempted.
         received: bool,
     },
 
@@ -527,13 +528,18 @@ impl fmt::Display for Error {
             ),
             Error::CapsuleProtocolConflict { previous, received } => write!(
                 f,
-                "Capsule-Protocol already negotiated with value {previous}; received conflicting value {received}"
+                "Capsule-Protocol already set to {previous}; attempted conflicting value {received}"
             ),
-            Error::H3DatagramError { message, .. } => write!(
-                f,
-                "HTTP/3 datagram or capsule protocol error ({H3_DATAGRAM_ERROR_CODE:#x}): {}",
-                message.0
-            ),
+            Error::H3DatagramError { kind, message, .. } => match kind {
+                H3DatagramErrorKind::NotNegotiated | H3DatagramErrorKind::MismatchedStreamId => {
+                    write!(f, "HTTP/3 datagram local error: {}", message.0)
+                }
+                _ => write!(
+                    f,
+                    "HTTP/3 datagram or capsule protocol error ({H3_DATAGRAM_ERROR_CODE:#x}): {}",
+                    message.0
+                ),
+            },
         }
     }
 }
@@ -736,6 +742,27 @@ mod tests {
     }
 
     #[test]
+    fn h3_datagram_error_local_kinds_use_local_prefix() {
+        let not_negotiated =
+            Error::h3_datagram_error(H3DatagramErrorKind::NotNegotiated, "carrier not selected");
+        assert_eq!(
+            not_negotiated.to_string(),
+            "HTTP/3 datagram local error: carrier not selected"
+        );
+        assert!(!not_negotiated.to_string().contains("0x33"));
+
+        let mismatched = Error::h3_datagram_error(
+            H3DatagramErrorKind::MismatchedStreamId,
+            "wrong request stream",
+        );
+        assert_eq!(
+            mismatched.to_string(),
+            "HTTP/3 datagram local error: wrong request stream"
+        );
+        assert!(!mismatched.to_string().contains("0x33"));
+    }
+
+    #[test]
     fn h3_datagram_error_preserves_source_error() {
         let inner = Error::InvalidVarInt {
             kind: VarIntErrorKind::BufferTooShort,
@@ -875,7 +902,7 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "Capsule-Protocol already negotiated with value true; received conflicting value false"
+            "Capsule-Protocol already set to true; attempted conflicting value false"
         );
     }
 
