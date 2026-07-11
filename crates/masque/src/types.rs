@@ -3,7 +3,7 @@
 use std::fmt;
 
 use crate::settings::{H3DatagramSettingValue, SETTINGS_H3_DATAGRAM};
-use crate::{Error, Result};
+use crate::{Error, H3DatagramErrorKind, Result};
 
 /// Identifies a MASQUE target protocol.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -29,29 +29,59 @@ impl fmt::Display for Protocol {
     }
 }
 
-/// Negotiated capabilities for a MASQUE session.
+/// The carrier used to transport UDP payloads for a CONNECT-UDP association.
+///
+/// `Session::select_udp_carrier` returns this value based on negotiated
+/// capabilities. Callers then invoke the matching `UdpAssociation` encode/decode
+/// method for the selected carrier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UdpCarrier {
+    /// UDP payloads are carried in HTTP/3 Datagram frames.
+    H3Datagram,
+    /// UDP payloads are carried as `DATAGRAM` capsules on the request stream.
+    DatagramCapsule,
+}
+
+/// Negotiated capabilities for a single MASQUE request/association.
 ///
 /// Keeping related HTTP/3 capability state in a dedicated inner type lets
 /// `Session` grow without turning into an unstructured bag of fields and
 /// keeps the public `Session` shape stable.
 ///
-/// `Option<H3DatagramSettingValue>` encodes the invariant that each direction's
-/// `SETTINGS_H3_DATAGRAM` value is recorded at most once: `None` means not yet
-/// negotiated, and `Some(value)` means the value has been finalized.
+/// This type tracks both `SETTINGS_H3_DATAGRAM` (RFC 9297) and the
+/// `Capsule-Protocol` header (RFC 9298). `Option<H3DatagramSettingValue>`
+/// encodes the invariant that each direction's `SETTINGS_H3_DATAGRAM` value is
+/// recorded at most once: `None` means not yet negotiated, and `Some(value)`
+/// means the value has been finalized. `Option<bool>` records each direction's
+/// advertised `Capsule-Protocol` value in the same way.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct NegotiatedCaps {
     /// The local endpoint's advertised `SETTINGS_H3_DATAGRAM` value, if any.
     local_h3_datagram: Option<H3DatagramSettingValue>,
     /// The peer endpoint's advertised `SETTINGS_H3_DATAGRAM` value, if any.
     peer_h3_datagram: Option<H3DatagramSettingValue>,
+    /// The local endpoint's advertised `Capsule-Protocol` value, if any.
+    local_capsule_protocol: Option<bool>,
+    /// The peer endpoint's advertised `Capsule-Protocol` value, if any.
+    peer_capsule_protocol: Option<bool>,
 }
 
-/// A MASQUE session context.
+/// A MASQUE session context for a single request/association.
 ///
 /// `Session` tracks the target protocol and negotiated HTTP/3 capabilities
-/// (currently HTTP/3 Datagram support per RFC 9297). New negotiated state
-/// should be added inside the internal `NegotiatedCaps` type rather than
-/// appended directly to this struct.
+/// for one MASQUE request/association. This includes HTTP/3 Datagram support
+/// per RFC 9297 and `Capsule-Protocol` negotiation per RFC 9298, which
+/// together determine the selected [`UdpCarrier`] via
+/// [`Session::select_udp_carrier`].
+///
+/// `Session` is scoped to a single MASQUE request/association. It must not be
+/// reused across requests unless the caller intentionally shares identical
+/// negotiation, because per-request state such as `Capsule-Protocol` would
+/// otherwise leak between associations.
+///
+/// New negotiated state should be added inside the internal `NegotiatedCaps`
+/// type rather than appended directly to this struct.
 ///
 /// # Equality semantics
 ///
@@ -81,6 +111,8 @@ impl Session {
             caps: NegotiatedCaps {
                 local_h3_datagram: None,
                 peer_h3_datagram: None,
+                local_capsule_protocol: None,
+                peer_capsule_protocol: None,
             },
         }
     }
@@ -146,6 +178,97 @@ impl Session {
         }
         self.caps.peer_h3_datagram = Some(value);
         Ok(())
+    }
+
+    /// Record the local endpoint's advertised `Capsule-Protocol` value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::CapsuleProtocolConflict`] if the local value has already
+    /// been recorded.
+    pub fn set_local_capsule_protocol(&mut self, enabled: bool) -> Result<()> {
+        if let Some(previous) = self.caps.local_capsule_protocol {
+            return Err(Error::CapsuleProtocolConflict {
+                previous,
+                received: enabled,
+            });
+        }
+        self.caps.local_capsule_protocol = Some(enabled);
+        Ok(())
+    }
+
+    /// Apply a peer `Capsule-Protocol` value received from the remote endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::CapsuleProtocolConflict`] if the peer value has already
+    /// been recorded.
+    pub fn negotiate_peer_capsule_protocol(&mut self, enabled: bool) -> Result<()> {
+        if let Some(previous) = self.caps.peer_capsule_protocol {
+            return Err(Error::CapsuleProtocolConflict {
+                previous,
+                received: enabled,
+            });
+        }
+        self.caps.peer_capsule_protocol = Some(enabled);
+        Ok(())
+    }
+
+    /// Return whether DATAGRAM capsules are enabled for this session.
+    ///
+    /// This is `true` only when HTTP/3 Datagrams are finalized but not enabled
+    /// and both endpoints have agreed to `Capsule-Protocol: ?1`.
+    ///
+    /// `None` for `SETTINGS_H3_DATAGRAM` means "not yet negotiated". Because
+    /// `Session` does not observe the HTTP/3 SETTINGS frame directly, the caller
+    /// must finalize the settings exchange by recording every advertised value;
+    /// once a side's SETTINGS frame is fully received, an absent
+    /// `SETTINGS_H3_DATAGRAM` should be recorded as
+    /// `H3DatagramSettingValue::DISABLED` per RFC 9297 Section 2.1.1.
+    #[must_use]
+    pub(crate) fn is_datagram_capsule_enabled(&self) -> bool {
+        let h3_finalized =
+            self.caps.local_h3_datagram.is_some() && self.caps.peer_h3_datagram.is_some();
+        h3_finalized
+            && !self.is_h3_datagram_enabled()
+            && matches!(
+                (
+                    self.caps.local_capsule_protocol,
+                    self.caps.peer_capsule_protocol
+                ),
+                (Some(true), Some(true))
+            )
+    }
+
+    /// Select the carrier to use for UDP payload transport.
+    ///
+    /// HTTP/3 Datagrams are preferred when available. If not, DATAGRAM capsules
+    /// are selected when `Capsule-Protocol: ?1` has been mutually negotiated.
+    /// Otherwise returns [`Error::H3DatagramError`] with kind
+    /// [`H3DatagramErrorKind::NotNegotiated`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidConfig`] if the session protocol is not
+    /// [`Protocol::ConnectUdp`], because UDP carrier selection only applies to
+    /// CONNECT-UDP associations.
+    pub fn select_udp_carrier(&self) -> Result<UdpCarrier> {
+        if self.protocol != Protocol::ConnectUdp {
+            return Err(Error::InvalidConfig {
+                field: "protocol",
+                message: "UDP carrier selection requires Protocol::ConnectUdp".into(),
+            });
+        }
+        if self.is_h3_datagram_enabled() {
+            Ok(UdpCarrier::H3Datagram)
+        } else if self.is_datagram_capsule_enabled() {
+            Ok(UdpCarrier::DatagramCapsule)
+        } else {
+            Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::NotNegotiated,
+                "no UDP transport carrier is negotiated for this session",
+            ))
+        }
     }
 }
 
@@ -371,5 +494,142 @@ mod tests {
             .negotiate_peer_h3_datagram(H3DatagramSettingValue::ENABLED)
             .unwrap();
         assert!(session.is_h3_datagram_enabled());
+    }
+
+    #[test]
+    fn session_selects_h3_datagram_when_enabled() {
+        let mut session = Session::new(Protocol::ConnectUdp);
+        session
+            .set_local_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
+        session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::ENABLED)
+            .unwrap();
+        assert_eq!(
+            session.select_udp_carrier().unwrap(),
+            UdpCarrier::H3Datagram
+        );
+    }
+
+    #[test]
+    fn session_selects_datagram_capsule_when_h3_disabled_and_capsule_protocol_enabled() {
+        let mut session = Session::new(Protocol::ConnectUdp);
+        session
+            .set_local_h3_datagram(H3DatagramSettingValue::DISABLED)
+            .unwrap();
+        session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::DISABLED)
+            .unwrap();
+        session.set_local_capsule_protocol(true).unwrap();
+        session.negotiate_peer_capsule_protocol(true).unwrap();
+        assert_eq!(
+            session.select_udp_carrier().unwrap(),
+            UdpCarrier::DatagramCapsule
+        );
+    }
+
+    #[test]
+    fn session_select_udp_carrier_fails_when_nothing_enabled() {
+        let session = Session::new(Protocol::ConnectUdp);
+        let err = session.select_udp_carrier().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::NotNegotiated,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn session_select_udp_carrier_fails_when_capsule_protocol_set_but_h3_not_finalized() {
+        let mut session = Session::new(Protocol::ConnectUdp);
+        // Capsule-Protocol is mutually agreed, but SETTINGS_H3_DATAGRAM has
+        // not been finalized on either side. The carrier cannot be selected
+        // until the HTTP/3 Datagram negotiation is finalized.
+        session.set_local_capsule_protocol(true).unwrap();
+        session.negotiate_peer_capsule_protocol(true).unwrap();
+        let err = session.select_udp_carrier().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::NotNegotiated,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn session_select_udp_carrier_fails_when_only_one_h3_side_is_finalized() {
+        let mut session = Session::new(Protocol::ConnectUdp);
+        session
+            .set_local_h3_datagram(H3DatagramSettingValue::DISABLED)
+            .unwrap();
+        session.set_local_capsule_protocol(true).unwrap();
+        session.negotiate_peer_capsule_protocol(true).unwrap();
+        let err = session.select_udp_carrier().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::NotNegotiated,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn session_rejects_conflicting_local_capsule_protocol() {
+        let mut session = Session::new(Protocol::ConnectUdp);
+        session.set_local_capsule_protocol(true).unwrap();
+        let err = session.set_local_capsule_protocol(false).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::CapsuleProtocolConflict {
+                previous: true,
+                received: false,
+            }
+        ));
+    }
+
+    #[test]
+    fn session_rejects_conflicting_peer_capsule_protocol() {
+        let mut session = Session::new(Protocol::ConnectUdp);
+        session.negotiate_peer_capsule_protocol(true).unwrap();
+        let err = session.negotiate_peer_capsule_protocol(false).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::CapsuleProtocolConflict {
+                previous: true,
+                received: false,
+            }
+        ));
+    }
+
+    #[test]
+    fn session_select_udp_carrier_rejects_non_connect_udp_protocol() {
+        for protocol in [Protocol::ConnectIp, Protocol::ConnectEthernet] {
+            let session = Session::new(protocol);
+            let err = session.select_udp_carrier().unwrap_err();
+            assert!(matches!(
+                err,
+                Error::InvalidConfig {
+                    field: "protocol",
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn udp_carrier_is_non_exhaustive() {
+        // The attribute itself is the compile-time guarantee. This test
+        // documents the intended behavior: adding a variant must not break
+        // downstream exhaustive matches.
+        let carrier = UdpCarrier::H3Datagram;
+        // A non-exhaustive enum can still be matched inside the defining crate.
+        let _name = match carrier {
+            UdpCarrier::H3Datagram => "h3",
+            UdpCarrier::DatagramCapsule => "capsule",
+        };
     }
 }

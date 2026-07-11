@@ -1,14 +1,16 @@
 //! UDP association management for CONNECT-UDP.
 //!
-//! A [`UdpAssociation`] represents the binding between a CONNECT-UDP request
-//! stream and a local UDP socket connected to the target. HTTP/3 Datagrams are
-//! correlated with this association by the request stream identifier
-//! ([`UdpAssociation::request_stream_id`]). The [`AssociationId`] is reserved
-//! for future Context ID support (RFC 9298 Section 8.2) and is not currently
-//! used to frame or unframe datagram payloads.
+//! A [`UdpAssociation`] represents the binding between a single CONNECT-UDP
+//! request stream and a local UDP socket connected to the target. HTTP/3
+//! Datagrams are correlated with this association by the request stream
+//! identifier ([`UdpAssociation::request_stream_id`]). The [`AssociationId`] is
+//! reserved for future Context ID support (RFC 9298 Section 8.2) and is not
+//! currently used to frame or unframe datagram payloads.
 //!
-//! The association also carries a [`Session`] that records negotiated HTTP/3
-//! capabilities.
+//! The association also carries a [`Session`] that records the negotiated
+//! capabilities for this specific CONNECT-UDP request/association. The caller
+//! must ensure the session already reflects the final negotiated state before
+//! binding; `UdpAssociation` does not provide a mutation path for the session.
 //!
 //! # Security note
 //!
@@ -23,7 +25,9 @@ use std::net::SocketAddr;
 use tokio::net::UdpSocket;
 
 use crate::types::Protocol;
-use crate::{Error, H3DatagramErrorKind, HttpDatagram, Result, Session, TransportKind};
+use crate::{
+    DatagramCapsule, Error, H3DatagramErrorKind, HttpDatagram, Result, Session, TransportKind,
+};
 
 /// A context identifier for a UDP association.
 ///
@@ -213,11 +217,25 @@ impl UdpAssociation {
         Ok(())
     }
 
+    fn ensure_datagram_capsule_enabled(&self) -> Result<()> {
+        if !self.session.is_datagram_capsule_enabled() {
+            return Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::NotNegotiated,
+                "DATAGRAM capsules are not enabled or selected for this association",
+            ));
+        }
+        Ok(())
+    }
+
     /// Encode an outbound UDP payload as an HTTP/3 Datagram addressed to this
     /// association's request stream.
     ///
     /// The UDP payload is framed with the CONNECT-UDP default Context ID (0)
     /// encoded as a QUIC variable-length integer, per RFC 9298 Section 8.2.
+    ///
+    /// Callers should use [`crate::Session::select_udp_carrier`] to choose the
+    /// carrier and then call the matching encode method. This method validates
+    /// that HTTP/3 Datagrams are the negotiated carrier.
     ///
     /// # Errors
     ///
@@ -242,8 +260,9 @@ impl UdpAssociation {
                 ),
             });
         }
-        let mut framed = payload;
-        framed.insert(0, 0x00);
+        let mut framed = Vec::with_capacity(payload.len() + 1);
+        framed.push(0x00);
+        framed.extend_from_slice(&payload);
         HttpDatagram::new(self.stream_id, framed)
     }
 
@@ -253,6 +272,10 @@ impl UdpAssociation {
     /// The CONNECT-UDP Context ID is parsed from the start of the HTTP/3
     /// Datagram payload and must be the default context (0), per RFC 9298
     /// Section 8.2. The remaining bytes are returned as the UDP payload.
+    ///
+    /// Callers should use [`crate::Session::select_udp_carrier`] to choose the
+    /// carrier and then call the matching decode method. This method validates
+    /// that HTTP/3 Datagrams are the negotiated carrier.
     ///
     /// # Errors
     ///
@@ -267,6 +290,10 @@ impl UdpAssociation {
     /// Returns [`Error::H3DatagramError`] with kind
     /// [`H3DatagramErrorKind::InvalidContextId`] if the Context ID is missing,
     /// malformed, or not the default context (0).
+    ///
+    /// The Context ID must be encoded in the shortest possible form per RFC
+    /// 9000 Section 16; non-minimal encodings of the value `0` (for example,
+    /// `0x40 0x00`) are rejected.
     ///
     /// Returns [`Error::H3DatagramError`] with kind
     /// [`H3DatagramErrorKind::PayloadTooLarge`] if the decoded UDP payload
@@ -296,7 +323,130 @@ impl UdpAssociation {
         if consumed != 1 {
             return Err(Error::h3_datagram_error(
                 H3DatagramErrorKind::InvalidContextId,
-                "CONNECT-UDP Context ID 0 must use the canonical 1-byte varint encoding",
+                "non-canonical Context ID 0 encoding: must use shortest varint form",
+            ));
+        }
+        let udp_payload = &payload[consumed..];
+        let max = max_payload_for_addr(self.target);
+        if udp_payload.len() > max {
+            return Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::PayloadTooLarge,
+                format!(
+                    "decoded UDP payload length {} exceeds maximum UDP payload size {} for {}",
+                    udp_payload.len(),
+                    max,
+                    self.target.ip()
+                ),
+            ));
+        }
+        Ok(udp_payload.to_vec())
+    }
+
+    /// Encode an outbound UDP payload as a `DATAGRAM` capsule on this
+    /// association's request stream.
+    ///
+    /// The UDP payload is framed with the CONNECT-UDP default Context ID (0)
+    /// encoded as a QUIC variable-length integer, per RFC 9298 Section 8.2, then
+    /// wrapped in a [`DatagramCapsule`].
+    ///
+    /// Callers should use [`crate::Session::select_udp_carrier`] to choose the
+    /// carrier and then call the matching encode method. This method validates
+    /// that `DATAGRAM` capsules are the negotiated carrier.
+    ///
+    /// The size check applies to the UDP payload itself (before the 1-byte
+    /// Context ID prefix is added). The resulting capsule value therefore
+    /// contains `payload.len() + 1` bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::H3DatagramError`] with kind
+    /// [`H3DatagramErrorKind::NotNegotiated`] if `DATAGRAM` capsules have not
+    /// been negotiated for this association.
+    ///
+    /// Returns [`Error::H3DatagramError`] with kind
+    /// [`H3DatagramErrorKind::PayloadTooLarge`] if `payload` exceeds the
+    /// address-family UDP payload limit.
+    pub fn encode_datagram_capsule(&self, payload: impl Into<Vec<u8>>) -> Result<DatagramCapsule> {
+        self.ensure_datagram_capsule_enabled()?;
+        let payload = payload.into();
+        let max = max_payload_for_addr(self.target);
+        if payload.len() > max {
+            return Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::PayloadTooLarge,
+                format!(
+                    "payload length {} exceeds maximum UDP payload size {} for {}",
+                    payload.len(),
+                    max,
+                    self.target.ip()
+                ),
+            ));
+        }
+        let mut framed = Vec::with_capacity(payload.len() + 1);
+        framed.push(0x00);
+        framed.extend_from_slice(&payload);
+        let datagram = HttpDatagram::new(self.stream_id, framed)?;
+        Ok(DatagramCapsule::new(datagram))
+    }
+
+    /// Decode an inbound `DATAGRAM` capsule into a UDP payload to forward to the
+    /// target.
+    ///
+    /// The CONNECT-UDP Context ID is parsed from the start of the capsule value
+    /// and must be the default context (0). The remaining bytes are returned as
+    /// the UDP payload.
+    ///
+    /// Callers should use [`crate::Session::select_udp_carrier`] to choose the
+    /// carrier and then call the matching decode method. This method validates
+    /// that `DATAGRAM` capsules are the negotiated carrier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::H3DatagramError`] with kind
+    /// [`H3DatagramErrorKind::NotNegotiated`] if `DATAGRAM` capsules have not
+    /// been negotiated for this association.
+    ///
+    /// Returns [`Error::H3DatagramError`] with kind
+    /// [`H3DatagramErrorKind::MismatchedStreamId`] if the capsule is not
+    /// addressed to this association's request stream.
+    ///
+    /// Returns [`Error::H3DatagramError`] with kind
+    /// [`H3DatagramErrorKind::InvalidContextId`] if the Context ID is missing,
+    /// malformed, or not the default context (0).
+    ///
+    /// The Context ID must be encoded in the shortest possible form per RFC
+    /// 9000 Section 16; non-minimal encodings of the value `0` (for example,
+    /// `0x40 0x00`) are rejected.
+    ///
+    /// Returns [`Error::H3DatagramError`] with kind
+    /// [`H3DatagramErrorKind::PayloadTooLarge`] if the decoded UDP payload
+    /// exceeds the address-family UDP payload limit.
+    pub fn decode_datagram_capsule(&self, capsule: DatagramCapsule) -> Result<Vec<u8>> {
+        self.ensure_datagram_capsule_enabled()?;
+        let datagram = capsule.into_datagram();
+        if datagram.stream_id() != self.stream_id {
+            return Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::MismatchedStreamId,
+                "datagram capsule is not addressed to this association's request stream",
+            ));
+        }
+        let payload = datagram.into_payload();
+        let (context_id, consumed) = crate::quic_varint::decode(&payload).map_err(|e| {
+            Error::h3_datagram_error_with_source(
+                H3DatagramErrorKind::InvalidContextId,
+                "failed to decode CONNECT-UDP Context ID",
+                e,
+            )
+        })?;
+        if context_id != 0 {
+            return Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::InvalidContextId,
+                format!("unsupported CONNECT-UDP Context ID {context_id}, expected 0"),
+            ));
+        }
+        if consumed != 1 {
+            return Err(Error::h3_datagram_error(
+                H3DatagramErrorKind::InvalidContextId,
+                "non-canonical Context ID 0 encoding: must use shortest varint form",
             ));
         }
         let udp_payload = &payload[consumed..];
@@ -773,8 +923,8 @@ mod tests {
         .await
         .unwrap();
 
-        // 0x40 0x00 is a valid 2-byte varint representing 0, but QUIC varints
-        // are required to use the shortest encoding, so it must be rejected.
+        // 0x40 0x00 is a non-minimal 2-byte varint representing 0. RFC 9000
+        // Section 16 requires the shortest encoding, so it is rejected.
         let datagram = HttpDatagram::new(test_stream_id(), [0x40, 0x00, b'x']).unwrap();
         let err = assoc.decode_h3_datagram(datagram).unwrap_err();
         assert!(matches!(
@@ -1172,5 +1322,377 @@ mod tests {
         let mut buf = [0u8; 64];
         let n = assoc.recv_into(&mut buf).await.unwrap();
         assert_eq!(&buf[..n], payload);
+    }
+
+    fn capsule_only_session() -> Session {
+        let mut session = Session::new(Protocol::ConnectUdp);
+        session
+            .set_local_h3_datagram(H3DatagramSettingValue::DISABLED)
+            .unwrap();
+        session
+            .negotiate_peer_h3_datagram(H3DatagramSettingValue::DISABLED)
+            .unwrap();
+        session.set_local_capsule_protocol(true).unwrap();
+        session.negotiate_peer_capsule_protocol(true).unwrap();
+        session
+    }
+
+    #[tokio::test]
+    async fn encode_datagram_capsule_round_trips_payload() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            capsule_only_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let payload = b"hello";
+        let capsule = assoc.encode_datagram_capsule(payload.as_slice()).unwrap();
+        let decoded = assoc.decode_datagram_capsule(capsule).unwrap();
+        assert_eq!(decoded, payload.as_slice());
+    }
+
+    #[tokio::test]
+    async fn encode_datagram_capsule_round_trips_empty_payload() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            capsule_only_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let capsule = assoc.encode_datagram_capsule(Vec::new()).unwrap();
+        let decoded = assoc.decode_datagram_capsule(capsule).unwrap();
+        assert_eq!(decoded, &[]);
+    }
+
+    #[tokio::test]
+    async fn encode_datagram_capsule_rejects_oversized_payload() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            capsule_only_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let payload = vec![0u8; MAX_UDP_PAYLOAD_IPV4 + 1];
+        let err = assoc.encode_datagram_capsule(payload).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::PayloadTooLarge,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn encode_datagram_capsule_fails_when_not_negotiated() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            test_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let err = assoc.encode_datagram_capsule(b"hello").unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::NotNegotiated,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn decode_datagram_capsule_fails_when_not_negotiated() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            test_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let datagram = HttpDatagram::new(test_stream_id(), vec![0x00, b'x']).unwrap();
+        let capsule = DatagramCapsule::new(datagram);
+        let err = assoc.decode_datagram_capsule(capsule).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::NotNegotiated,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn decode_datagram_capsule_rejects_mismatched_stream_id() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            capsule_only_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let datagram = HttpDatagram::new(test_stream_id() + 4, vec![0x00, b'x']).unwrap();
+        let capsule = DatagramCapsule::new(datagram);
+        let err = assoc.decode_datagram_capsule(capsule).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::MismatchedStreamId,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn decode_datagram_capsule_rejects_nonzero_context_id() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            capsule_only_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let datagram = HttpDatagram::new(test_stream_id(), vec![0x01, b'x']).unwrap();
+        let capsule = DatagramCapsule::new(datagram);
+        let err = assoc.decode_datagram_capsule(capsule).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::InvalidContextId,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn decode_datagram_capsule_rejects_missing_context_id() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            capsule_only_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let datagram = HttpDatagram::new(test_stream_id(), Vec::new()).unwrap();
+        let capsule = DatagramCapsule::new(datagram);
+        let err = assoc.decode_datagram_capsule(capsule).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::InvalidContextId,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn decode_datagram_capsule_rejects_truncated_context_id() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            capsule_only_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        // 0x40 signals a 2-byte varint, but the second byte is missing.
+        let datagram = HttpDatagram::new(test_stream_id(), [0x40]).unwrap();
+        let capsule = DatagramCapsule::new(datagram);
+        let err = assoc.decode_datagram_capsule(capsule).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::InvalidContextId,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn decode_datagram_capsule_rejects_noncanonical_zero_context_id() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            capsule_only_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        // 0x40 0x00 is a non-minimal 2-byte varint representing 0. RFC 9000
+        // Section 16 requires the shortest encoding, so it is rejected.
+        let datagram = HttpDatagram::new(test_stream_id(), [0x40, 0x00, b'x']).unwrap();
+        let capsule = DatagramCapsule::new(datagram);
+        let err = assoc.decode_datagram_capsule(capsule).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::InvalidContextId,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn encode_datagram_capsule_round_trips_max_ipv4_payload() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            capsule_only_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let payload = vec![0u8; MAX_UDP_PAYLOAD_IPV4];
+        let capsule = assoc.encode_datagram_capsule(payload.clone()).unwrap();
+        let decoded = assoc.decode_datagram_capsule(capsule).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[tokio::test]
+    async fn encode_datagram_capsule_round_trips_max_ipv6_payload() {
+        let target: SocketAddr = "[::1]:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "[::1]:0".parse().unwrap(),
+            target,
+            capsule_only_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let payload = vec![0u8; MAX_UDP_PAYLOAD_IPV6];
+        let capsule = assoc.encode_datagram_capsule(payload.clone()).unwrap();
+        let decoded = assoc.decode_datagram_capsule(capsule).unwrap();
+        assert_eq!(decoded, payload);
+    }
+
+    #[tokio::test]
+    async fn encode_datagram_capsule_round_trips_through_wire_format() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            capsule_only_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let payload = b"wire-format";
+        let capsule = assoc.encode_datagram_capsule(payload.as_slice()).unwrap();
+        let encoded = capsule.encode().unwrap();
+        let (decoded_capsule, consumed) =
+            DatagramCapsule::decode(&encoded, test_stream_id()).unwrap();
+        assert_eq!(consumed, encoded.len());
+        assert_eq!(decoded_capsule.datagram().stream_id(), test_stream_id());
+        assert_eq!(
+            decoded_capsule.datagram().payload(),
+            &[
+                0x00, b'w', b'i', b'r', b'e', b'-', b'f', b'o', b'r', b'm', b'a', b't'
+            ]
+        );
+        let decoded_payload = assoc.decode_datagram_capsule(decoded_capsule).unwrap();
+        assert_eq!(decoded_payload, payload.as_slice());
+    }
+
+    #[tokio::test]
+    async fn decode_datagram_capsule_rejects_oversized_ipv4_payload() {
+        let target: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            target,
+            capsule_only_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let mut payload = vec![0x00];
+        payload.extend_from_slice(&vec![0u8; MAX_UDP_PAYLOAD_IPV4 + 1]);
+        let datagram = HttpDatagram::new(test_stream_id(), payload).unwrap();
+        let capsule = DatagramCapsule::new(datagram);
+        let err = assoc.decode_datagram_capsule(capsule).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::PayloadTooLarge,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn decode_datagram_capsule_rejects_oversized_ipv6_payload() {
+        let target: SocketAddr = "[::1]:1".parse().unwrap();
+        let assoc = UdpAssociation::bind(
+            "[::1]:0".parse().unwrap(),
+            target,
+            capsule_only_session(),
+            AssociationId::new(1).unwrap(),
+            test_stream_id(),
+        )
+        .await
+        .unwrap();
+
+        let mut payload = vec![0x00];
+        payload.extend_from_slice(&vec![0u8; MAX_UDP_PAYLOAD_IPV6 + 1]);
+        let datagram = HttpDatagram::new(test_stream_id(), payload).unwrap();
+        let capsule = DatagramCapsule::new(datagram);
+        let err = assoc.decode_datagram_capsule(capsule).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::H3DatagramError {
+                kind: H3DatagramErrorKind::PayloadTooLarge,
+                ..
+            }
+        ));
     }
 }
