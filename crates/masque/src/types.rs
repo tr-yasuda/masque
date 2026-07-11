@@ -35,6 +35,7 @@ impl fmt::Display for Protocol {
 /// capabilities. Callers then invoke the matching `UdpAssociation` encode/decode
 /// method for the selected carrier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum UdpCarrier {
     /// UDP payloads are carried in HTTP/3 Datagram frames.
     H3Datagram,
@@ -223,6 +224,12 @@ impl Session {
     /// are selected when negotiated. Otherwise returns
     /// [`Error::H3DatagramError`] with kind [`H3DatagramErrorKind::NotNegotiated`].
     pub fn select_udp_carrier(&self) -> Result<UdpCarrier> {
+        if self.protocol != Protocol::ConnectUdp {
+            return Err(Error::InvalidConfig {
+                field: "protocol",
+                message: "UDP carrier selection requires Protocol::ConnectUdp".into(),
+            });
+        }
         if self.is_h3_datagram_enabled() {
             Ok(UdpCarrier::H3Datagram)
         } else if self.is_datagram_capsule_enabled() {
@@ -531,5 +538,33 @@ mod tests {
                 received: false,
             }
         ));
+    }
+
+    #[test]
+    fn session_select_udp_carrier_rejects_non_connect_udp_protocol() {
+        for protocol in [Protocol::ConnectIp, Protocol::ConnectEthernet] {
+            let session = Session::new(protocol);
+            let err = session.select_udp_carrier().unwrap_err();
+            assert!(matches!(
+                err,
+                Error::InvalidConfig {
+                    field: "protocol",
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn udp_carrier_is_non_exhaustive() {
+        // The attribute itself is the compile-time guarantee. This test
+        // documents the intended behavior: adding a variant must not break
+        // downstream exhaustive matches.
+        let carrier = UdpCarrier::H3Datagram;
+        // A non-exhaustive enum can still be matched inside the defining crate.
+        let _name = match carrier {
+            UdpCarrier::H3Datagram => "h3",
+            UdpCarrier::DatagramCapsule => "capsule",
+        };
     }
 }

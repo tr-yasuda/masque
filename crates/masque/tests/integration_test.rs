@@ -16,7 +16,7 @@ use masque::{
     CAPSULE_PROTOCOL, CONNECT_UDP_PROTOCOL, Capsule, CapsuleParser, CapsuleProtocolError,
     CapsuleType, Config, ConnectUdpRequest, DatagramCapsule, DatagramPayload, Error,
     H3DatagramErrorKind, H3DatagramSettingValue, HttpDatagram, Protocol, SETTINGS_H3_DATAGRAM,
-    Session, VarIntErrorKind, parse_capsule_protocol, serialize_capsule_protocol,
+    Session, UdpCarrier, VarIntErrorKind, parse_capsule_protocol, serialize_capsule_protocol,
     validate_h3_datagram_setting_value,
 };
 
@@ -761,4 +761,29 @@ fn session_selects_datagram_capsule_carrier_from_public_api() {
         session.select_udp_carrier().unwrap(),
         UdpCarrier::DatagramCapsule
     );
+}
+
+#[test]
+fn session_select_udp_carrier_rejects_non_connect_udp_protocol() {
+    for protocol in [Protocol::ConnectIp, Protocol::ConnectEthernet] {
+        let session = Session::new(protocol);
+        let err = session.select_udp_carrier().unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidConfig {
+                field: "protocol",
+                ..
+            }
+        ));
+    }
+}
+
+#[test]
+fn udp_carrier_is_non_exhaustive() {
+    // `UdpCarrier` is marked `#[non_exhaustive]` so that future carriers can
+    // be added without breaking downstream exhaustive matches. The attribute is
+    // enforced at compile time; this runtime test simply exercises the public
+    // variants from outside the crate.
+    let variants = [UdpCarrier::H3Datagram, UdpCarrier::DatagramCapsule];
+    assert_eq!(variants.len(), 2);
 }
